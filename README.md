@@ -41,7 +41,7 @@ Yngchii-X3D maintains clean architectural tracking of upstream Fritchii releases
   <img src="dist/branding/yngchii_settings_ui.png" alt="Yngchii-X3D Settings GUI" width="900" style="border-radius: 8px; border: 1px solid #444;">
 </p>
 
-### ⚡ Dedicated GPU Thread Core Pinning (**Exclusive — Not in Upstream Fritchii v4.1**)
+### ⚡ Dedicated GPU Thread Core Pinning 
 * **Upstream Limitation**: Upstream Fritchii v4.1 allows the two performance-critical Vulkan submission threads (`GPUFront` and `GPUBack`) to freely migrate across logical cores or share execution resources with the Switch 2 Guest CPU emulation threads, causing execution port contention on SMT pairs and 30–40ms micro-stutters.
 * **Yngchii-X3D Engine**: Automatically pins threads to dedicated physical cores on the 3D V-Cache CCD:
   * **`GPUFront`** is pinned strictly to **Core 1 (LP2 / mask `0x4`)**.
