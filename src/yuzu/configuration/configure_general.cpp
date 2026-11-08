@@ -12,8 +12,10 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include "common/settings.h"
+#include "common/x3d_detect.h"
 #include "core/core.h"
 #include "qt_common/config/uisettings.h"
+#include "video_core/nx2_perf.h"
 #include "ui_configure_general.h"
 #include "yuzu/configuration/configuration_shared.h"
 #include "yuzu/configuration/configure_general.h"
@@ -51,6 +53,14 @@ ConfigureGeneral::~ConfigureGeneral() = default;
 void ConfigureGeneral::SetConfiguration() {
     UpdateExternalContentList();
     ui->check_yngvi_x3d->setChecked(Settings::values.yngvi_x3d_optimize.GetValue());
+    ui->check_yngvi_cpu_x3d->setChecked(Settings::values.yngvi_cpu_x3d_boost.GetValue());
+    const auto& cpu = Common::DetectRyzenX3DCpu();
+    ui->label_cpu_detected->setText(QString::fromStdString("Detected CPU: " + cpu.status_summary));
+    if (!cpu.is_supported_x3d) {
+        ui->label_cpu_detected->setStyleSheet(QStringLiteral("color: #d29922; font-weight: bold;"));
+    } else {
+        ui->label_cpu_detected->setStyleSheet(QStringLiteral("color: #3fb950; font-weight: bold;"));
+    }
     ui->check_discord_presence->setChecked(UISettings::values.enable_discord_presence.GetValue());
 }
 
@@ -113,8 +123,17 @@ void ConfigureGeneral::ResetDefaults() {
 }
 
 void ConfigureGeneral::ApplyConfiguration() {
-    Settings::values.yngvi_x3d_optimize = ui->check_yngvi_x3d->isChecked();
+    const bool prev_x3d = Settings::values.yngvi_x3d_optimize.GetValue();
+    const bool prev_cpu_x3d = Settings::values.yngvi_cpu_x3d_boost.GetValue();
+    const bool new_x3d = ui->check_yngvi_x3d->isChecked();
+    const bool new_cpu_x3d = ui->check_yngvi_cpu_x3d->isChecked();
+    Settings::values.yngvi_x3d_optimize = new_x3d;
+    Settings::values.yngvi_cpu_x3d_boost = new_cpu_x3d;
     UISettings::values.enable_discord_presence = ui->check_discord_presence->isChecked();
+    if (prev_x3d != new_x3d || prev_cpu_x3d != new_cpu_x3d) {
+        Settings::ApplyYngviX3dProfile(new_x3d, new_cpu_x3d);
+        VideoCommon::Nx2Perf::Reload();
+    }
     bool powered_on = system.IsPoweredOn();
     for (const auto& func : apply_funcs) {
         func(powered_on);

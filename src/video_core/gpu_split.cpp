@@ -21,6 +21,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/thread.h"
+#include "common/x3d_detect.h"
 #include "core/core.h"
 #include "video_core/engines/engine_interface.h"
 #include "video_core/engines/maxwell_3d.h"
@@ -50,14 +51,15 @@ void Pause() {
 [[maybe_unused]] std::atomic<u32> g_back_thread_id{};
 
 u32 SplitSpinCount() noexcept {
+    if (!Settings::values.yngvi_cpu_x3d_boost.GetValue() ||
+        !Common::DetectRyzenX3DCpu().is_supported_x3d) {
+        return u32{2048};
+    }
     if (const char* value = std::getenv("EDEN_NX2_SPLIT_SPINS")) {
         return static_cast<u32>(std::clamp<unsigned long>(
             std::strtoul(value, nullptr, 10), 64UL, 65536UL));
     }
-    if (Settings::values.yngvi_x3d_optimize.GetValue()) {
-        return u32{16384};
-    }
-    return u32{2048};
+    return u32{32768};
 }
 
 } // Anonymous namespace

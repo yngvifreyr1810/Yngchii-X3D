@@ -62,48 +62,68 @@ inline bool Enabled() {
     return enabled;
 }
 
-inline bool On(Opt opt) {
-    static const unsigned off = [] {
-        const auto bit = [](Opt opt) { return 1U << static_cast<unsigned>(opt); };
-        const auto names = [](const char* variable) {
-            unsigned bits = 0;
-            std::string_view list = std::getenv(variable) ? std::getenv(variable) : "";
-            while (!list.empty()) {
-                const size_t comma = list.find(',');
-                const std::string_view name = list.substr(0, comma);
-                bool known = false;
-                for (size_t i = 0; i < opt_names.size(); ++i) {
-                    if (name == opt_names[i]) {
-                        bits |= 1U << i;
-                        known = true;
-                    }
+inline unsigned ComputeMask() {
+    const auto bit = [](Opt opt) { return 1U << static_cast<unsigned>(opt); };
+    const auto names = [](const char* variable) {
+        unsigned bits = 0;
+        const char* env_val = std::getenv(variable);
+        std::string_view list = env_val ? env_val : "";
+        while (!list.empty()) {
+            const size_t comma = list.find(',');
+            const std::string_view name = list.substr(0, comma);
+            bool known = false;
+            for (size_t i = 0; i < opt_names.size(); ++i) {
+                if (name == opt_names[i]) {
+                    bits |= 1U << i;
+                    known = true;
                 }
-                if (!known && !name.empty()) {
-                    LOG_WARNING(HW_GPU, "Nx2Perf: unknown name {} in {}", name, variable);
-                }
-                list = comma == std::string_view::npos ? std::string_view{} : list.substr(comma + 1);
             }
-            return bits;
-        };
-        // FramesAhead is on: with Ocarina's CPU readbacks preflushed it is worth ~1 fps (48.3 ->
-        // 49.5 on the Kokiri porch) and it waits for this frame too whenever the GPU falls behind.
-        const unsigned default_off = bit(Opt::CleanWords) |
-                                     bit(Opt::IndexRebind) | bit(Opt::SubmitBudget) |
-                                     bit(Opt::FenceFlush) | bit(Opt::FragmentBarrier) |
-                                     bit(Opt::FrontSleep) | bit(Opt::AsyncPipelines) |
-                                     bit(Opt::Bounds) | bit(Opt::SplitOverlap);
-        unsigned mask = (default_off & ~names("EDEN_NX2_PERF_ON")) | names("EDEN_NX2_PERF_OFF");
-        if (const char* value = std::getenv("EDEN_NX2_PERF_FRAMES_AHEAD"); value && value[0] == '0') {
-            mask |= bit(Opt::FramesAhead);
+            if (!known && !name.empty()) {
+                LOG_WARNING(HW_GPU, "Nx2Perf: unknown name {} in {}", name, variable);
+            }
+            list = comma == std::string_view::npos ? std::string_view{} : list.substr(comma + 1);
         }
+        return bits;
+    };
+    // FramesAhead is on: with Ocarina's CPU readbacks preflushed it is worth ~1 fps (48.3 ->
+    // 49.5 on the Kokiri porch) and it waits for this frame too whenever the GPU falls behind.
+    const unsigned default_off = bit(Opt::CleanWords) |
+                                 bit(Opt::IndexRebind) | bit(Opt::SubmitBudget) |
+                                 bit(Opt::FenceFlush) | bit(Opt::FragmentBarrier) |
+                                 bit(Opt::FrontSleep) | bit(Opt::AsyncPipelines) |
+                                 bit(Opt::Bounds) | bit(Opt::SplitOverlap);
+    unsigned mask = (default_off & ~names("EDEN_NX2_PERF_ON")) | names("EDEN_NX2_PERF_OFF");
+    if (const char* value = std::getenv("EDEN_NX2_PERF_FRAMES_AHEAD"); value && value[0] == '0') {
+        mask |= bit(Opt::FramesAhead);
+    }
+    return mask;
+}
+
+inline std::atomic<unsigned>& GetMaskStorage() {
+    static std::atomic<unsigned> mask{[] {
+        unsigned m = ComputeMask();
         std::string state;
         for (size_t i = 0; i < opt_names.size(); ++i) {
-            state += fmt::format(" {}={}", opt_names[i], Enabled() && (mask >> i & 1) == 0 ? "on" : "off");
+            state += fmt::format(" {}={}", opt_names[i], Enabled() && (m >> i & 1) == 0 ? "on" : "off");
         }
         LOG_INFO(HW_GPU, "Nx2Perf:{}", state);
-        return mask;
-    }();
-    return Enabled() && (off >> static_cast<unsigned>(opt) & 1) == 0;
+        return m;
+    }()};
+    return mask;
+}
+
+inline void Reload() {
+    unsigned m = ComputeMask();
+    GetMaskStorage().store(m, std::memory_order_relaxed);
+    std::string state;
+    for (size_t i = 0; i < opt_names.size(); ++i) {
+        state += fmt::format(" {}={}", opt_names[i], Enabled() && (m >> i & 1) == 0 ? "on" : "off");
+    }
+    LOG_INFO(HW_GPU, "Nx2Perf (reloaded):{}", state);
+}
+
+inline bool On(Opt opt) {
+    return Enabled() && (GetMaskStorage().load(std::memory_order_relaxed) >> static_cast<unsigned>(opt) & 1) == 0;
 }
 
 inline bool Verify() {

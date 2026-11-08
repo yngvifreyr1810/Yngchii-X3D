@@ -295,7 +295,8 @@ struct Values {
                                            true,
                                            &use_custom_cpu_ticks};
 
-    SwitchableSetting<bool> yngvi_x3d_optimize{linkage, true, "yngvi_x3d_optimize", Category::Cpu};
+    SwitchableSetting<bool> yngvi_x3d_optimize{linkage, false, "yngvi_x3d_optimize", Category::Cpu};
+    SwitchableSetting<bool> yngvi_cpu_x3d_boost{linkage, false, "yngvi_cpu_x3d_boost", Category::Cpu};
 
     Setting<bool> cpuopt_page_tables{linkage, true, "cpuopt_page_tables", Category::CpuDebug};
     Setting<bool> cpuopt_block_linking{linkage, true, "cpuopt_block_linking", Category::CpuDebug};
@@ -1061,5 +1062,8 @@ void RestoreGlobalState(bool is_powered_on);
 
 bool IsConfiguringGlobal();
 void SetConfiguringGlobal(bool is_global);
+
+void ApplyYngviX3dProfile(bool gpu_vram_enabled, bool cpu_x3d_enabled);
+void ApplyYngviX3dProfile();
 
 } // namespace Settings

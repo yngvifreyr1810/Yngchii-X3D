@@ -1930,8 +1930,9 @@ void Device::CollectPhysicalMemoryInfo() {
             total_physical_vram += mem_properties.memoryHeaps[element].size;
         }
     }
-    // EDEN_NX2_VRAM_LIMIT_MIB=<n>: treat every device-local heap as n MiB (small card tests).
-    if (const char* value = std::getenv("EDEN_NX2_VRAM_LIMIT_MIB")) {
+    if (!Settings::values.yngvi_x3d_optimize.GetValue()) {
+        heap_size_limit = 0;
+    } else if (const char* value = std::getenv("EDEN_NX2_VRAM_LIMIT_MIB")) {
         heap_size_limit = std::strtoull(value, nullptr, 10) << 20;
         if (heap_size_limit != 0) {
             LOG_INFO(Render_Vulkan, "EDEN_NX2_VRAM_LIMIT_MIB: device-local heaps limited to {} MiB",
@@ -1940,7 +1941,7 @@ void Device::CollectPhysicalMemoryInfo() {
             LOG_WARNING(Render_Vulkan, "EDEN_NX2_VRAM_LIMIT_MIB={} is not a size in MiB, ignored",
                         value);
         }
-    } else if (Settings::values.yngvi_x3d_optimize.GetValue() && total_physical_vram > 0) {
+    } else if (total_physical_vram > 0) {
         // Yngvi's X3D Optimize: Auto-tune WDDM heap limit to 77% of physical VRAM.
         // Prevents Windows DWM DirectFlip paging stutters and avoids over-committing VRAM on any card (6GB, 8GB, 10GB, 12GB, 16GB, 24GB+).
         heap_size_limit = (total_physical_vram * 77) / 100;

@@ -10,9 +10,10 @@
 
 #include <algorithm>
 #include <atomic>
-#if defined(__AVX512F__) || defined(__AVX2__)
+#if defined(_M_X64) || defined(__x86_64__)
 #include <immintrin.h>
 #endif
+#include "common/x3d_detect.h"
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -1848,6 +1849,50 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
     }
 }
 
+#if defined(_M_X64) || defined(__x86_64__)
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((target("avx512f,avx512bw,avx512vl")))
+#endif
+static inline bool ComparePageAvx512(const void* snap, const void* guest) {
+    const auto* const snap_ptr = reinterpret_cast<const __m512i*>(snap);
+    const auto* const guest_ptr = reinterpret_cast<const __m512i*>(guest);
+    for (size_t v = 0; v < Core::DEVICE_PAGESIZE / 256; ++v) {
+        const __m512i d0 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 0),
+                                            _mm512_loadu_si512(guest_ptr + v * 4 + 0));
+        const __m512i d1 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 1),
+                                            _mm512_loadu_si512(guest_ptr + v * 4 + 1));
+        const __m512i d2 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 2),
+                                            _mm512_loadu_si512(guest_ptr + v * 4 + 2));
+        const __m512i d3 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 3),
+                                            _mm512_loadu_si512(guest_ptr + v * 4 + 3));
+        const __m512i any = _mm512_or_si512(_mm512_or_si512(d0, d1), _mm512_or_si512(d2, d3));
+        if (_mm512_test_epi64_mask(any, any) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((target("avx2")))
+#endif
+static inline bool ComparePageAvx2(const void* snap, const void* guest) {
+    const auto* const s = reinterpret_cast<const __m256i*>(snap);
+    const auto* const g = reinterpret_cast<const __m256i*>(guest);
+    for (size_t v = 0; v < Core::DEVICE_PAGESIZE / 128; ++v) {
+        const __m256i d0 = _mm256_xor_si256(_mm256_loadu_si256(s + v * 4 + 0), _mm256_loadu_si256(g + v * 4 + 0));
+        const __m256i d1 = _mm256_xor_si256(_mm256_loadu_si256(s + v * 4 + 1), _mm256_loadu_si256(g + v * 4 + 1));
+        const __m256i d2 = _mm256_xor_si256(_mm256_loadu_si256(s + v * 4 + 2), _mm256_loadu_si256(g + v * 4 + 2));
+        const __m256i d3 = _mm256_xor_si256(_mm256_loadu_si256(s + v * 4 + 3), _mm256_loadu_si256(g + v * 4 + 3));
+        const __m256i any = _mm256_or_si256(_mm256_or_si256(d0, d1), _mm256_or_si256(d2, d3));
+        if (!_mm256_testz_si256(any, any)) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
+
 template <class P>
 void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, int mode) {
     // EDEN_NX2_EXP9 (experiment, 0 = off): compare only the pages whose guest memory may have
@@ -1919,33 +1964,23 @@ void BufferCache<P>::CheckNativeBankPagesTracked(DAddr device_addr, u32 size, in
             continue;
         }
         ++stats.compared[reason];
-#if defined(__AVX512F__)
-        const auto* const snap_ptr = reinterpret_cast<const __m512i*>(snapshot.words.data());
-        const auto* const guest_ptr = reinterpret_cast<const __m512i*>(guest);
-        bool page_equal = true;
-        for (size_t v = 0; v < Core::DEVICE_PAGESIZE / 256; ++v) {
-            const __m512i d0 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 0),
-                                                _mm512_loadu_si512(guest_ptr + v * 4 + 0));
-            const __m512i d1 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 1),
-                                                _mm512_loadu_si512(guest_ptr + v * 4 + 1));
-            const __m512i d2 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 2),
-                                                _mm512_loadu_si512(guest_ptr + v * 4 + 2));
-            const __m512i d3 = _mm512_xor_si512(_mm512_loadu_si512(snap_ptr + v * 4 + 3),
-                                                _mm512_loadu_si512(guest_ptr + v * 4 + 3));
-            const __m512i any = _mm512_or_si512(_mm512_or_si512(d0, d1), _mm512_or_si512(d2, d3));
-            if (_mm512_test_epi64_mask(any, any) != 0) {
-                page_equal = false;
-                break;
+        bool page_equal = false;
+        if (Settings::values.yngvi_x3d_optimize.GetValue()) {
+#if defined(_M_X64) || defined(__x86_64__)
+            if (Common::HasRuntimeAvx512()) {
+                page_equal = ComparePageAvx512(snapshot.words.data(), guest);
+            } else {
+                page_equal = ComparePageAvx2(snapshot.words.data(), guest);
             }
+#else
+            page_equal = (std::memcmp(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE) == 0);
+#endif
+        } else {
+            page_equal = (std::memcmp(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE) == 0);
         }
         if (page_equal) {
             continue;
         }
-#else
-        if (std::memcmp(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE) == 0) {
-            continue;
-        }
-#endif
         ++stats.changed[reason];
         snapshot.changed_frame = frame_tick;
         std::memcpy(snapshot.words.data(), guest, Core::DEVICE_PAGESIZE);

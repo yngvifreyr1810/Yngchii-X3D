@@ -409,12 +409,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     FrontendCommon::GenerateSettings();
 
 #ifdef _WIN32
-    if (Settings::values.yngvi_x3d_optimize.GetValue()) {
-        _putenv_s("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
-        _putenv_s("NV_ALLOW_ANSEL", "0");
-        _putenv_s("ANSEL_SDK_DISABLE", "1");
-        LOG_INFO(Frontend, "[Yngvi's X3D Optimize] Selective Overlay Filter active: NVIDIA Overlay/Ansel disabled; MSI Afterburner (VK_LAYER_RTSS) preserved.");
-    }
+    Settings::ApplyYngviX3dProfile();
 #endif
 
     setAcceptDrops(true);

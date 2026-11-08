@@ -26,6 +26,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/time_zone.h"
+#include "common/x3d_detect.h"
 
 #if defined(__linux__ ) && defined(ARCHITECTURE_arm64)
 #include <unistd.h>
@@ -500,6 +501,138 @@ bool IsOpenGL() {
     default:
         return false;
     }
+}
+
+void ApplyYngviX3dProfile(bool gpu_vram_enabled, bool cpu_x3d_enabled) {
+    auto set_env = [](const char* name, const char* value) {
+#ifdef _WIN32
+        _putenv_s(name, value);
+#else
+        setenv(name, value, 1);
+#endif
+    };
+
+    const auto& cpu = Common::DetectRyzenX3DCpu();
+
+    // 1. Tier 1: Universal GPU/VRAM & Engine Optimizations (Safe on ALL CPUs & GPUs)
+    if (gpu_vram_enabled) {
+        LOG_INFO(Config, "[Yngvi's X3D Optimize] Enabling Tier 1 Universal GPU/VRAM & Engine Optimizations");
+        set_env("EDEN_NX2_PRELOAD_ALL_PIPELINES", "1");
+        set_env("EDEN_NX2_DRIVER_PIPELINE_CACHE", "1");
+        set_env("EDEN_NX2_PRELOAD_RESIDENT_MAX", "22000");
+        set_env("EDEN_NX2_PRELOAD_WARM_MAX", "6000");
+        set_env("EDEN_NX2_BACKGROUND_PIPELINES", "0");
+        set_env("EDEN_NX2_VSYNC_HZ", "240");
+        set_env("EDEN_NX2_OCCLUSION_OFF", "1");
+        set_env("EDEN_NX2_HOST_PACE", "0");
+        set_env("EDEN_NX2_GRAPHICS_SSBO_BARE", "0");
+        set_env("EDEN_NX2_WRITTEN_SSBO_MARK_KIB", "64");
+        set_env("EDEN_NX2_ACQUIRE_PRECHECK", "2");
+        set_env("EDEN_NX2_MACRO_SINK", "1");
+        set_env("EDEN_NX2_COMPUTE_SINK", "1");
+        set_env("EDEN_NX2_RING_PAIRS", "1");
+        set_env("EDEN_NX2_UBO_INPLACE", "1");
+        set_env("EDEN_NX2_PIPELINE_CLEAN", "1");
+        set_env("EDEN_NX2_LIST_WAIT_SKIP", "1");
+        set_env("EDEN_NX2_PREFLUSH", "1");
+        set_env("EDEN_NX2_SEM_FAST", "2");
+        set_env("EDEN_NX2_FENCE_BATCH", "1");
+        set_env("EDEN_NX2_EXP2", "1");
+        set_env("EDEN_NX2_EXP9", "3");
+        set_env("EDEN_NX2_EXP10", "1");
+        set_env("EDEN_NX2_EXP12", "1");
+        set_env("EDEN_NX2_EXP14", "1");
+        set_env("EDEN_NX2_EXP17", "1");
+        set_env("EDEN_NX2_EXP18", "7");
+        set_env("EDEN_NX2_EXP19", "2");
+        set_env("EDEN_NX2_RANGED_MAX", "8192");
+        set_env("EDEN_NX2_LOOP_SKIP", "1");
+
+        set_env("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
+        set_env("NV_ALLOW_ANSEL", "0");
+        set_env("ANSEL_SDK_DISABLE", "1");
+    } else {
+        LOG_INFO(Config, "[Yngvi's X3D Optimize] Tier 1 GPU/VRAM Optimizations Disabled (Stock Mode)");
+        set_env("EDEN_NX2_PRELOAD_ALL_PIPELINES", "0");
+        set_env("EDEN_NX2_DRIVER_PIPELINE_CACHE", "0");
+        set_env("EDEN_NX2_PRELOAD_RESIDENT_MAX", "0");
+        set_env("EDEN_NX2_PRELOAD_WARM_MAX", "0");
+        set_env("EDEN_NX2_BACKGROUND_PIPELINES", "0");
+        set_env("EDEN_NX2_VSYNC_HZ", "60");
+        set_env("EDEN_NX2_OCCLUSION_OFF", "0");
+        set_env("EDEN_NX2_HOST_PACE", "1");
+        set_env("EDEN_NX2_GRAPHICS_SSBO_BARE", "0");
+        set_env("EDEN_NX2_WRITTEN_SSBO_MARK_KIB", "0");
+        set_env("EDEN_NX2_ACQUIRE_PRECHECK", "0");
+        set_env("EDEN_NX2_MACRO_SINK", "0");
+        set_env("EDEN_NX2_COMPUTE_SINK", "0");
+        set_env("EDEN_NX2_RING_PAIRS", "0");
+        set_env("EDEN_NX2_UBO_INPLACE", "0");
+        set_env("EDEN_NX2_PIPELINE_CLEAN", "0");
+        set_env("EDEN_NX2_LIST_WAIT_SKIP", "0");
+        set_env("EDEN_NX2_PREFLUSH", "0");
+        set_env("EDEN_NX2_SEM_FAST", "0");
+        set_env("EDEN_NX2_FENCE_BATCH", "0");
+        set_env("EDEN_NX2_EXP2", "0");
+        set_env("EDEN_NX2_EXP9", "0");
+        set_env("EDEN_NX2_EXP10", "0");
+        set_env("EDEN_NX2_EXP12", "0");
+        set_env("EDEN_NX2_EXP14", "0");
+        set_env("EDEN_NX2_EXP17", "0");
+        set_env("EDEN_NX2_EXP18", "0");
+        set_env("EDEN_NX2_EXP19", "0");
+        set_env("EDEN_NX2_RANGED_MAX", "0");
+        set_env("EDEN_NX2_LOOP_SKIP", "0");
+
+        set_env("VK_LOADER_LAYERS_DISABLE", "");
+        set_env("NV_ALLOW_ANSEL", "1");
+        set_env("ANSEL_SDK_DISABLE", "0");
+    }
+
+    // 2. Tier 2: CPU X3D Boost (Hard-Gated by is_supported_x3d)
+    if (cpu_x3d_enabled) {
+        if (cpu.is_supported_x3d) {
+            LOG_INFO(Config, "[Yngvi's X3D Optimize] Activating Tier 2 CPU X3D Boost for: {}", cpu.status_summary);
+            set_env("EDEN_NX2_SPLIT", "2");
+            set_env("EDEN_NX2_PIN_THREADS", "1");
+            set_env("EDEN_NX2_SPLIT_SPINS", "32768");
+            if (gpu_vram_enabled) {
+                set_env("EDEN_NX2_PERF_ON", "bounds,clean_words,async_pipelines,unswizzle_workers,cb_batch,index_rebind,sorted_page_batches,pipeline_retention,submit_budget,split_overlap");
+                set_env("EDEN_NX2_PERF_OFF", "front_sleep,fence_flush,fragment_barrier");
+            } else {
+                set_env("EDEN_NX2_PERF_ON", "split_overlap");
+                set_env("EDEN_NX2_PERF_OFF", "front_sleep");
+            }
+        } else {
+            LOG_WARNING(Config, "[Yngvi's X3D Optimize] CPU '{}' is not an AMD Ryzen X3D (Zen 3/4/5) processor; CPU X3D Boost safely bypassed.", cpu.brand_string);
+            set_env("EDEN_NX2_SPLIT", "0");
+            set_env("EDEN_NX2_PIN_THREADS", "0");
+            set_env("EDEN_NX2_SPLIT_SPINS", "2048");
+            if (gpu_vram_enabled) {
+                set_env("EDEN_NX2_PERF_ON", "bounds,clean_words,async_pipelines,unswizzle_workers,cb_batch,index_rebind,sorted_page_batches,pipeline_retention,submit_budget");
+                set_env("EDEN_NX2_PERF_OFF", "fence_flush,fragment_barrier");
+            } else {
+                set_env("EDEN_NX2_PERF_ON", "");
+                set_env("EDEN_NX2_PERF_OFF", "");
+            }
+        }
+    } else {
+        LOG_INFO(Config, "[Yngvi's X3D Optimize] Tier 2 CPU X3D Boost Disabled (Stock Mode)");
+        set_env("EDEN_NX2_SPLIT", "0");
+        set_env("EDEN_NX2_PIN_THREADS", "0");
+        set_env("EDEN_NX2_SPLIT_SPINS", "2048");
+        if (gpu_vram_enabled) {
+            set_env("EDEN_NX2_PERF_ON", "bounds,clean_words,async_pipelines,unswizzle_workers,cb_batch,index_rebind,sorted_page_batches,pipeline_retention,submit_budget");
+            set_env("EDEN_NX2_PERF_OFF", "fence_flush,fragment_barrier");
+        } else {
+            set_env("EDEN_NX2_PERF_ON", "");
+            set_env("EDEN_NX2_PERF_OFF", "");
+        }
+    }
+}
+
+void ApplyYngviX3dProfile() {
+    ApplyYngviX3dProfile(values.yngvi_x3d_optimize.GetValue(), values.yngvi_cpu_x3d_boost.GetValue());
 }
 
 } // namespace Settings

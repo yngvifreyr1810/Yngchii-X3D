@@ -425,13 +425,13 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
             critical_memory = (device_local * 11) / 16;
             minimum_memory = (expected_memory > 1_GiB) ? (expected_memory - 1_GiB) : (expected_memory / 2);
         }
-    }
 
-    // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB override the collector's thresholds.
-    for (const auto& [name, target] : {std::pair{"EDEN_NX2_TC_EXPECTED_MIB", &expected_memory},
-                                       std::pair{"EDEN_NX2_TC_CRITICAL_MIB", &critical_memory}}) {
-        if (const char* value = std::getenv(name)) {
-            *target = std::strtoull(value, nullptr, 10) << 20;
+        // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB override the collector's thresholds.
+        for (const auto& [name, target] : {std::pair{"EDEN_NX2_TC_EXPECTED_MIB", &expected_memory},
+                                           std::pair{"EDEN_NX2_TC_CRITICAL_MIB", &critical_memory}}) {
+            if (const char* value = std::getenv(name)) {
+                *target = std::strtoull(value, nullptr, 10) << 20;
+            }
         }
     }
     if (log) {

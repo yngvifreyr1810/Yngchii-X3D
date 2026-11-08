@@ -61,7 +61,33 @@
            </font>
           </property>
           <property name="text">
-           <string>Enable Yngvi's X3D Optimize (Recommended for Ryzen X3D / Zen 4 &amp;&amp; Modern GPUs)</string>
+           <string>Enable Yngvi's X3D Optimize (Universal GPU/VRAM Auto-Budget, Selective Overlay Filter, Flat-Hash Engine)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="check_yngvi_cpu_x3d">
+          <property name="font">
+           <font>
+            <weight>75</weight>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="text">
+           <string>Enable CPU X3D Boost (Ryzen 5/7/9 X3D Only — Dedicated GPU Core Pinning &amp;&amp; Zero-Sleep Futex)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="label_cpu_detected">
+          <property name="font">
+           <font>
+            <weight>75</weight>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="text">
+           <string>Detected CPU: Detecting hardware...</string>
           </property>
          </widget>
         </item>
@@ -75,12 +101,10 @@
         <item>
          <widget class="QLabel" name="label_yngvi_x3d_desc">
           <property name="text">
-           <string>Hardware-level performance engine for AMD Ryzen (Zen 4 / X3D) and modern GPUs:
-• Dedicated GPU Core Pinning: Pins GPU threads to dedicated cores; isolates guest CPU to eliminate thread contention.
-• Selective Overlay Filter: Disables NVIDIA overlay/filters (saves 8–15% FPS) while preserving MSI Afterburner / RTSS.
-• Low-Latency 3D V-Cache Split: Replaces Windows kernel sleeps with spin-waits for ultra-responsive frame delivery.
-• Dynamic VRAM Budgeting: Auto-scales texture cache to GPU VRAM (6GB–24GB+) to prevent PCIe paging stutters.
-• AVX-512 &amp; JIT Acceleration: Vectorized DMA dirty checking and flat hashing for instant texture invalidation.</string>
+           <string>Hardware-level performance engine with safe 2-tier architecture:
+• Tier 1 (Universal): Dynamic VRAM Auto-Budgeting (77% heap limit), Selective Overlay Filter (disables NVIDIA overlay/filters while preserving RTSS), and runtime AVX-512 / AVX2 DMA scan. Safe on ALL CPUs &amp; GPUs!
+• Tier 2 (Ryzen X3D Only): Dedicated GPUFront/GPUBack Core Pinning &amp; 3D V-Cache Zero-Sleep Futex (32k spins). Safely auto-bypassed on Intel and non-X3D CPUs with zero core starvation.
+(Note: Restart Yngchii-X3D after toggling to apply all CPU affinity and Vulkan changes).</string>
           </property>
           <property name="wordWrap">
            <bool>true</bool>

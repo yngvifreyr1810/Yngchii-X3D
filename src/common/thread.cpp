@@ -24,6 +24,7 @@
 #include "common/settings.h"
 #include "common/thread.h"
 #include "common/thread_pinning.h"
+#include "common/x3d_detect.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
 #elif defined(__HAIKU__)
@@ -719,7 +720,8 @@ void SetCurrentThreadToPerformanceCores() {
 
 void PinCurrentThread(PinnedRole role) {
 #ifdef _WIN32
-    if (!Settings::values.yngvi_x3d_optimize.GetValue() && std::getenv("EDEN_NX2_PIN_THREADS") == nullptr) {
+    if (!Settings::values.yngvi_cpu_x3d_boost.GetValue() ||
+        !Common::DetectRyzenX3DCpu().is_supported_x3d) {
         return;
     }
     // Off with EDEN_NX2_PIN_THREADS=0, forced with 1, otherwise on with enough performance cores

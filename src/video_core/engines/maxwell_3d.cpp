@@ -74,11 +74,12 @@ Maxwell3D::Maxwell3D(MemoryManager& memory_manager_)
     }
     fast_maxwell3d = VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::Method) && !record_write_history &&
                      !g_trace_first_method_writes && !VideoCommon::Nx2Profile::Enabled();
-    const char* skip_same = std::getenv("EDEN_NX2_SKIP_SAME");
-    if (skip_same != nullptr) {
+    if (!Settings::values.yngvi_x3d_optimize.GetValue()) {
+        skip_same_value_writes = false;
+    } else if (const char* skip_same = std::getenv("EDEN_NX2_SKIP_SAME"); skip_same != nullptr) {
         skip_same_value_writes = skip_same[0] != '0';
     } else {
-        skip_same_value_writes = Settings::values.yngvi_x3d_optimize.GetValue();
+        skip_same_value_writes = true;
     }
     perf_verify = VideoCommon::Nx2Perf::Verify();
 }

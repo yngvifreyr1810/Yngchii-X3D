@@ -12,6 +12,7 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "startup_checks.h"
+#include "yuzu/startup_crash_guard.h"
 
 #if YUZU_ROOM
 #include <cstring>
@@ -179,6 +180,7 @@ static void LoadNx2Switches(const char* argv0) {
 }
 
 int main(int argc, char* argv[]) {
+    YuzuCrashGuard::InitializeEarlyCrashGuard();
 #ifdef ENABLE_UPDATE_CHECKER
     // Before the switches are added to the environment, which a restart must not inherit.
     Updater::PrepareLaunch();

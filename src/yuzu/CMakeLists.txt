@@ -171,6 +171,8 @@ add_executable(yuzu
     loading_screen.ui
 
     main.cpp
+    startup_crash_guard.cpp
+    startup_crash_guard.h
 
     multiplayer/chat_room.cpp
     multiplayer/chat_room.h

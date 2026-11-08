@@ -138,12 +138,7 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
                             u32 required_version, Core::Frontend::WindowSystemType window_type,
                             bool enable_validation) {
 #ifdef _WIN32
-    if (Settings::values.yngvi_x3d_optimize.GetValue()) {
-        _putenv_s("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
-        _putenv_s("NV_ALLOW_ANSEL", "0");
-        _putenv_s("ANSEL_SDK_DISABLE", "1");
-        LOG_INFO(Render_Vulkan, "[Yngvi's X3D Optimize] Selective Overlay Filter active: NVIDIA Overlay/Ansel disabled; MSI Afterburner (VK_LAYER_RTSS) preserved.");
-    }
+    Settings::ApplyYngviX3dProfile();
 #endif
     if (!library.IsOpen()) {
         LOG_ERROR(Render_Vulkan, "Vulkan library not available");
