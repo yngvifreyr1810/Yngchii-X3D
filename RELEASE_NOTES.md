@@ -42,7 +42,7 @@
 ### 📦 Asset Checksums
 * **`Yngchii-X3D-v4.1-Windows-x64.zip`**
   * Size: `107,430,206 bytes` (~102.4 MB)
-  * SHA-256: `72635c0954590895dc7124e5b1edf079fa15c3f232b564fdc2d60d9aaa75811e`
+  * SHA-256: `016bbd182c597fad707c226c60402fafc450e3c154d45de6d560b84ad063fc05`
 
 ---
 
