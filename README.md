@@ -87,20 +87,11 @@ Each option features full persistence in `qt-config.ini` (`[UI] enable_discord_p
 
 ---
 
-## 4. Discord Rich Presence Integration
 
-<p align="center">
-  <img src="dist/branding/discord_presence.png" alt="Discord Rich Presence" width="420" style="border-radius: 8px; border: 1px solid #444;">
-</p>
-
-* Connects natively via Win32 Named Pipes (`\\.\pipe\discord-ipc-0`..`9`).
-* Displays rich game details, elapsed playtime, and active optimization status:
-  * **Main Menu**: `Idle in Main Menu` | `⚡ Yngvi's X3D Optimize: Ready`
-  * **In-Game**: `Playing <Title>` | `⚡ Yngvi's X3D Optimize: ON | Vulkan`
 
 ---
 
-## 5. Building from Source
+## 4. Building from Source
 
 ### Prerequisites
 * Windows 10/11 x64
@@ -130,7 +121,7 @@ The resulting binary will be output to `build/bin/lichii.exe` (or `Yngchii-X3D.e
 
 ---
 
-## 6. Credits & Acknowledgments
+## 5. Credits & Acknowledgments
 * **[Zortos / Frizti](https://github.com/Frizti)**: Author and creator of the incredible **[Fritchii](https://github.com/Frizti/Fritchii)** project.
 * **Eden & Eglantine Teams**: For ongoing modern Nintendo Switch emulation innovations.
 * **yuzu Emulator Project**: Original foundation and architecture.
