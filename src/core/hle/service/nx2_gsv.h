@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include "common/nx2_timeline.h"
 #include <array>
 #include <thread>
 #include <chrono>
@@ -39,6 +40,7 @@
 #include "core/frontend/framebuffer_layout.h"
 #include "core/perf_stats.h"
 #include "video_core/gpu.h"
+#include "video_core/nx2_perf.h"
 #include "video_core/framebuffer_config.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_client_session.h"
@@ -1734,6 +1736,8 @@ private:
     // client may acquire next, four zero words. Nothing is shown yet; every slot is handed back
     // at once (changes.patch's default mask is 0x7fff).
     void PresentClientBuffer(HLERequestContext& ctx) {
+        Common::Nx2Timeline::OnPresent();
+        Common::Nx2Timeline::Span timeline_span{"guest present"};
         const auto* w = ctx.CommandBuffer();
         ++m_presents;
         if (Common::DkbFrameTrace::Enabled()) {
@@ -1751,10 +1755,24 @@ private:
         // previous frame's fence instead and let the game prepare frame N+1 meanwhile (waiting
         // for this frame there cost 8-56 ms of every 34-105 ms frame, or never finished).
         // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one.
-        static const int frames_ahead = [] {
+        static const int frames_ahead_setting = [] {
             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
             return value == nullptr ? -1 : value[0] == '1' ? 1 : 0;
         }();
+        // Donkey Kong Bananza's channels wait on each other every frame, so it always ran a frame
+        // ahead, where it rewrote memory the GPU thread hadn't read yet (misread commands, then
+        // a freeze or crash; rubberbanding while moving). Title 1 runs ahead without either.
+        constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
+        // Ocarina waited ~12 ms a frame on its previous frame's fence here (#161).
+        constexpr u64 OcarinaOfTimeProgramId = 0x0400486024DEC000ULL;
+        int frames_ahead = frames_ahead_setting;
+        const u64 app_program_id = system.GetApplicationProcessProgramID();
+        if (frames_ahead == -1 && app_program_id == DonkeyKongBananzaProgramId) {
+            frames_ahead = 0;
+        } else if (frames_ahead == -1 && app_program_id == OcarinaOfTimeProgramId &&
+                   VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::FramesAhead)) {
+            frames_ahead = 1;
+        }
         const auto entered = std::chrono::steady_clock::now();
         if (frames_ahead == 1 || (frames_ahead == -1 && !WaitForFrame(~w[22], w[24], true))) {
             LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
@@ -1782,7 +1800,7 @@ private:
         const auto waited = std::chrono::steady_clock::now();
         Composite(w[5], ~w[22], w[24], w[7]);
         const auto composited = std::chrono::steady_clock::now();
-        PaceToVblank(w[12]);
+        PaceToVblank(w[12], ctx.GetThread().GetOwnerProcess());
         const auto paced = std::chrono::steady_clock::now();
         if (Common::DkbFrameTrace::Enabled()) {
             const auto ms = [](auto duration) {
@@ -1823,6 +1841,11 @@ private:
             m_stats.composite_us += to_us(composited - waited);
             m_stats.pace_us += to_us(paced - composited);
             m_stats.max_fence_us = (std::max<long long>)(m_stats.max_fence_us, static_cast<long long>(to_us(waited - entered)));
+            // Counted at the reply: the game gets its buffers back with this frame unfinished.
+            if (const u32 fence_id = ~w[22]; fence_id < 192 &&
+                !system.Host1x().GetSyncpointManager().IsReadyGuest(fence_id, w[24])) {
+                ++m_stats.ran_ahead;
+            }
             if (m_stats.last_present != std::chrono::steady_clock::time_point{}) {
                 const long long frame = to_us(entered - m_stats.last_present);
                 m_stats.frame_us += frame;
@@ -1834,10 +1857,10 @@ private:
                 LOG_INFO(Service,
                          "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms), "
                          "blocked on the GPU fence {} us (max {}), composite {} us, vblank "
-                         "pacing {} us",
+                         "pacing {} us, {} ran a frame ahead",
                          m_stats.frame_us / 599, m_stats.max_frame_us, m_stats.hitches,
                          m_stats.fence_us / 600, m_stats.max_fence_us, m_stats.composite_us / 600,
-                         m_stats.pace_us / 600);
+                         m_stats.pace_us / 600, m_stats.ran_ahead);
                 m_stats = {.last_present = entered};
             }
         }
@@ -1855,7 +1878,7 @@ private:
     struct PresentStats {
         long long frame_us{}, fence_us{}, composite_us{}, pace_us{}, max_fence_us{};
         long long max_frame_us{}, hitches{};
-        u32 presents{};
+        u32 presents{}, ran_ahead{};
         std::chrono::steady_clock::time_point last_present{};
     } m_stats{};
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
@@ -1880,7 +1903,8 @@ private:
     // timing: present word 12, (swap interval << 16) | refresh rate. Fire Emblem: Fortune's Weave
     // sends 0x1003c during its boot logos and 0x2003c (two vblanks per frame, 30 fps) after; paced
     // at every vblank it ran at double speed. EDEN_NX2_SWAP_INTERVAL=<n> forces the interval.
-    void PaceToVblank(u32 timing) {
+    void PaceToVblank(u32 timing, const Kernel::KProcess* process) {
+        Common::Nx2Timeline::Span timeline_span{"present: pace to vblank"};
         const bool trace = Common::DkbFrameTrace::Enabled();
         if (trace) {
             if (m_frame_trace.previous_word && *m_frame_trace.previous_word != timing) {
@@ -1898,16 +1922,22 @@ private:
             const char* value = std::getenv("EDEN_NX2_SWAP_INTERVAL");
             return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
         }();
-        const auto& process = Kernel::GetCurrentProcess(kernel);
         const bool mkw_dynamic =
-            process.GetProgramId() == Settings::MarioKartWorldProgramId &&
-            process.IsMkwDynamicFpsPatchApplied() && Settings::values.mkw_dynamic_fps.GetValue();
+            process != nullptr && process->GetProgramId() == Settings::MarioKartWorldProgramId &&
+            process->IsMkwDynamicFpsPatchApplied() && Settings::values.mkw_dynamic_fps.GetValue();
         u32 swap_interval = std::clamp<u32>(timing >> 16, 1, 4);
         if (mkw_dynamic) {
             swap_interval = 1;
         }
         if (forced_interval != 0) {
             swap_interval = forced_interval;
+        }
+        // Ocarina of Time's 30 FPS mode (lower-end PCs): two vblanks a frame. Its frame step
+        // follows the time measured (Dynamic FPS by Dark), so it keeps full speed.
+        constexpr u64 OcarinaOfTimeId = 0x0400486024DEC000ULL;
+        if (process != nullptr && process->GetProgramId() == OcarinaOfTimeId &&
+            Settings::values.oot_30fps.GetValue()) {
+            swap_interval = (std::max)(swap_interval, 2U);
         }
         const u32 refresh_rate = (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
         if (trace) {
@@ -1916,22 +1946,41 @@ private:
             m_frame_trace.forced = forced_interval;
         }
         if (!Settings::values.use_speed_limit.GetValue() || Settings::SpeedLimit() == 0) {
+            VideoCommon::Nx2Perf::g_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
             return;
         }
         if (timing != std::exchange(m_swap_word, timing)) {
             LOG_INFO(Service, "nx2:vi2 present #{} swap interval {} at {} Hz (word 12 = {:#x})",
                      m_presents, swap_interval, refresh_rate, timing);
         }
-        const auto interval = std::chrono::nanoseconds{
+        auto interval = std::chrono::nanoseconds{
             100'000'000'000LL * swap_interval / refresh_rate / Settings::SpeedLimit()};
+        // Genlock: with the host frame pacer on, a frame period within 1% of a whole number of
+        // display refreshes becomes exactly that many measured refreshes (a "120 Hz" display at
+        // 119.98 Hz: 33.3389 ms instead of 33.3333). On the game's own clock its frames drifted
+        // against the display and missed their refresh about once a minute (a 41 ms frame, then
+        // a short one). The game runs at most 1% slower.
+        if (const long long host_refresh =
+                VideoCommon::Nx2Perf::g_host_refresh_ns.load(std::memory_order_relaxed);
+            host_refresh > 0) {
+            const long long refreshes =
+                (interval.count() + host_refresh / 2) / host_refresh;
+            const long long locked = refreshes * host_refresh;
+            if (refreshes >= 1 && std::abs(locked - interval.count()) * 100 < interval.count()) {
+                interval = std::chrono::nanoseconds{locked};
+            }
+        }
+        VideoCommon::Nx2Perf::g_guest_frame_interval_ns.store(interval.count(),
+                                                              std::memory_order_relaxed);
         if (trace) {
             m_frame_trace.target_ms = std::chrono::duration<double, std::milli>(interval).count();
         }
         const auto now = std::chrono::steady_clock::now();
-        const auto pacing = m_present_pacer.Advance(now, interval);
+        auto pacing = m_present_pacer.Advance(now, interval);
         if (trace) {
             m_frame_trace.deadline_reset = pacing.reset;
         }
+        AlignPhaseToDisplay(interval, now, pacing.deadline);
         if (now < pacing.deadline) {
             // Sleep this service thread in the guest kernel. It runs on guest core 3, and a host
             // sleep held that core for the whole wait: game threads scheduled there ran only
@@ -1951,10 +2000,78 @@ private:
         }
     }
 
+    // At 30 FPS and below the host frame pacer (vk_host_pacer.h) presents frames as soon as they
+    // are rendered. Move this game's frames (at most 0.5 ms a frame, later only while it sleeps
+    // here anyway) until each is ready ~6 ms before a display refresh: it is shown at that
+    // refresh, evenly spaced (genlock keeps the phase), with little wait. If moving them stops
+    // bringing them closer, leave the phase alone for a minute (an earlier version, steered by
+    // the time frames were held, held 60 FPS at 57-58).
+    void AlignPhaseToDisplay(std::chrono::nanoseconds interval,
+                             std::chrono::steady_clock::time_point now,
+                             std::chrono::steady_clock::time_point& deadline) {
+        using namespace std::chrono_literals;
+        const long long ahead =
+            VideoCommon::Nx2Perf::g_host_phase_ns.load(std::memory_order_relaxed);
+        const long long refresh =
+            VideoCommon::Nx2Perf::g_host_refresh_ns.load(std::memory_order_relaxed);
+        // Only on displays whose refresh divides the frame period (60/120/240 Hz for 30 FPS):
+        // on 75/144/165 Hz the frames land on a different phase each time and there is no
+        // single phase to aim for.
+        const long long refreshes = refresh > 0 ? (interval.count() + refresh / 2) / refresh : 0;
+        if (interval < 25ms || ahead < 0 || refresh <= 0 ||
+            std::abs(refreshes * refresh - interval.count()) * 100 > interval.count()) {
+            m_phase = {};
+            return;
+        }
+        // Positive: ready too early (waits for the refresh); negative: too close to it (a
+        // little jitter moves it to the next one).
+        double error = static_cast<double>(ahead) - 6e6;
+        if (error > static_cast<double>(refresh) / 2) {
+            error -= static_cast<double>(refresh);
+        }
+        m_phase.error_ema += (error - m_phase.error_ema) * 0.2;
+        if (m_phase.frames == 0) {
+            m_phase.error_ema = m_phase.window_error = error;
+        }
+        if (++m_phase.frames % 60 == 0) {
+            if (m_phase.window_shift > 3e6 && std::abs(m_phase.error_ema) > 2e6 &&
+                std::abs(m_phase.error_ema) > std::abs(m_phase.window_error) - 1e6) {
+                m_phase.backoff = 1800;
+                LOG_INFO(Service, "nx2:vi2 frame phase: moving frames {:.1f} ms did not bring them "
+                         "closer to the refreshes ({:.1f} -> {:.1f} ms off); not moving them for 60 s",
+                         m_phase.window_shift / 1e6, m_phase.window_error / 1e6,
+                         m_phase.error_ema / 1e6);
+            }
+            m_phase.window_shift = 0;
+            m_phase.window_error = m_phase.error_ema;
+        }
+        if (m_phase.backoff > 0) {
+            --m_phase.backoff;
+            return;
+        }
+        const double slack = static_cast<double>((deadline - now).count());
+        const double shift =
+            std::clamp(m_phase.error_ema * 0.2, -0.5e6, (std::min)(0.5e6, slack - 2e6));
+        if (std::abs(m_phase.error_ema) > 1e6 && std::abs(shift) > 1e4) {
+            const auto step = std::chrono::nanoseconds{static_cast<s64>(shift)};
+            m_present_pacer.Shift(step);
+            deadline += step;
+            m_phase.window_shift += std::abs(shift);
+        }
+    }
+    struct PhaseAlign {
+        double error_ema{};
+        double window_shift{};
+        double window_error{};
+        u64 frames{};
+        u32 backoff{};
+    } m_phase;
+
     /// Waits until the fence is reached. With `unless_gpu_waits`, gives up after a few ms once a
     /// GPU channel was seen suspended on a semaphore (it may be one this thread releases later).
     /// Returns whether the fence was reached.
     bool WaitForFrame(u32 fence_id, u32 fence_value, bool unless_gpu_waits = false) {
+        Common::Nx2Timeline::Span timeline_span{"present: wait for frame fence"};
         if (fence_id >= 192) {
             return true;
         }
@@ -2019,6 +2136,7 @@ private:
     // shown_size: the present's word 7, ((height - 1) << 16) | (width - 1) of the area the game drew
     // into from the image's top-left corner (0 when it gives none).
     void Composite(u32 image_id, u32 fence_id, u32 fence_value, u32 shown_size) {
+        Common::Nx2Timeline::Span timeline_span{"present: composite"};
         u64 address{};
         u32 parent{};
         u64 parent_offset{};

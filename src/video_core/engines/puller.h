@@ -78,7 +78,14 @@ public:
         u32 value;
         u32 operation;
         std::chrono::steady_clock::time_point since;
+        std::chrono::steady_clock::time_point last_fences; ///< When it last released fences
         bool reported;
+        /// Polls that found the word current but unmet (CanResumeAcquire).
+        u32 unmet_polls{};
+        /// When the back was last drained for this acquire: registration, then every drained poll.
+        std::chrono::steady_clock::time_point last_drain{};
+        /// Suspended after the fence release of a word read current (EXP12's resume counts).
+        bool readable_release{};
 
         [[nodiscard]] bool Matches(u32 current) const;
     };

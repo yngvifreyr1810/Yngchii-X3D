@@ -48,19 +48,12 @@ endif()
 
 create_target_directory_groups(qt_common)
 
-if (USE_DISCORD_PRESENCE)
-    target_sources(qt_common PRIVATE
-        discord/discord_impl.cpp
-        discord/discord_impl.h
-    )
-    target_link_libraries(qt_common PUBLIC DiscordRPC::discord-rpc httplib::httplib)
-
-    if (YUZU_USE_BUNDLED_OPENSSL)
-        target_link_libraries(qt_common PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-    endif()
-
-    target_compile_definitions(qt_common PUBLIC USE_DISCORD_PRESENCE)
-endif()
+target_sources(qt_common PRIVATE
+    discord/discord_impl.cpp
+    discord/discord_impl.h
+)
+target_link_libraries(qt_common PUBLIC nlohmann_json::nlohmann_json)
+target_compile_definitions(qt_common PUBLIC USE_DISCORD_PRESENCE)
 
 # TODO(crueter)
 target_link_libraries(qt_common PRIVATE Qt6::Widgets)

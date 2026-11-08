@@ -428,6 +428,32 @@ u64 AllocatedUsage(VkDeviceSize driver_usage, const VmaBudget& vma_budget) {
     return driver_usage - (std::min)(driver_usage, unused);
 }
 
+/// AMD GPUs before RDNA3 have no matrix units. AMD's driver still lists 16x16x16 float16
+/// cooperative matrix shapes on RDNA2 and then crashes building the HMMA compute pipelines
+/// (RX 6700 XT, driver 2.0.353, amdvlk64.dll+0x2f1c963 during the boot pipeline build).
+[[nodiscard]] bool IsAmdWithoutMatrixUnits(u32 vendor_id, u32 device_id) {
+    if (vendor_id != 0x1002) {
+        return false;
+    }
+    // GCN discrete, Navi 1x to Navi 23, then Navi 24 (0x7400-0x741F is CDNA2, which has matrix
+    // units). RDNA3 starts at 0x7440 (Navi 31).
+    if ((device_id >= 0x6600 && device_id <= 0x6FFF) ||
+        (device_id >= 0x7310 && device_id <= 0x73FF) ||
+        (device_id >= 0x7420 && device_id <= 0x743F)) {
+        return true;
+    }
+    switch (device_id) {
+    case 0x163F: // Van Gogh (Steam Deck)
+    case 0x1435: // Sephiroth (Steam Deck OLED)
+    case 0x1681: // Rembrandt
+    case 0x164E: // Raphael and Granite Ridge graphics
+    case 0x1506: // Mendocino
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // Anonymous namespace
 
 void Device::RemoveExtension(bool& extension, const std::string& extension_name) {
@@ -482,7 +508,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     const bool is_amd = is_amd_driver || is_radv;
 
     const bool is_intel_windows = driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
-    const bool is_intel_anv = driver_id == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA;
 
     const bool is_nvidia = driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
     const bool is_mvk = driver_id == VK_DRIVER_ID_MOLTENVK;
@@ -533,7 +558,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         IsFormatSupported(VK_FORMAT_D24_UNORM_S8_UINT,
                           VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT, FormatType::Optimal);
 
-    supports_conditional_barriers = !(is_intel_anv || is_intel_windows);
+    supports_conditional_barriers = !is_intel_windows;
 
     CollectPhysicalMemoryInfo();
     CollectToolingInfo();
@@ -762,6 +787,15 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     if (!extensions.descriptor_buffer) {
         RemoveExtensionFeature(extensions.buffer_device_address, features.buffer_device_address,
                                VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+    }
+
+    // The float16 workarounds above keep shaders from doing float16 arithmetic. Cooperative
+    // matrices only pass 16-bit floats to the tensor cores and back, so they keep the device
+    // feature, which no other shader then uses.
+    float16_math = features.shader_float16_int8.shaderFloat16;
+    if (extensions.cooperative_matrix) {
+        features.shader_float16_int8.shaderFloat16 = VK_TRUE;
+        LOG_INFO(Render_Vulkan, "VK_KHR_cooperative_matrix enabled for guest tensor operations");
     }
 
     logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
@@ -1339,6 +1373,16 @@ bool Device::GetSuitability(bool requires_swapchain) {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
         SetNext(next, properties.custom_border_color);
     }
+    if (extensions.cooperative_matrix) {
+        properties.cooperative_matrix.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
+        SetNext(next, properties.cooperative_matrix);
+    }
+    if (supported_extensions.contains(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME)) {
+        properties.integer_dot_product.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES;
+        SetNext(next, properties.integer_dot_product);
+    }
 
     // Perform the property fetch.
     physical.GetProperties2(properties2);
@@ -1418,6 +1462,15 @@ bool Device::GetSuitability(bool requires_swapchain) {
 }
 
 void Device::RemoveUnsuitableExtensions() {
+    // VK_KHR_present_id, VK_KHR_present_wait (the host frame pacer, vk_host_pacer.h)
+    extensions.present_id = extensions.present_id && features.present_id.presentId;
+    extensions.present_wait =
+        extensions.present_id && extensions.present_wait && features.present_wait.presentWait;
+    RemoveExtensionFeatureIfUnsuitable(extensions.present_wait, features.present_wait,
+                                       VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+    RemoveExtensionFeatureIfUnsuitable(extensions.present_id, features.present_id,
+                                       VK_KHR_PRESENT_ID_EXTENSION_NAME);
+
     // VK_EXT_color_write_enable
     extensions.color_write_enable = features.color_write_enable.colorWriteEnable;
     RemoveExtensionFeatureIfUnsuitable(extensions.color_write_enable, features.color_write_enable,
@@ -1619,6 +1672,80 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.shader_quad_control, features.shader_quad_control,
                                        VK_KHR_SHADER_QUAD_CONTROL_EXTENSION_NAME);
 
+    // VK_KHR_cooperative_matrix
+    // Used only for the guest's HMMA.16816.F16, as a subgroup operation of compute shaders whose
+    // subgroups are the guest's 32-lane warp. The matrices hold 16-bit floats, so the device needs
+    // shaderFloat16. Shaders with them use the Vulkan memory model and run with full subgroups.
+    // The guest's own M=16 N=8 K=16 shape is preferred; without it, a 16x16x16 shape runs HMMA
+    // through shared memory with the compute subgroups forced to 32 lanes.
+    {
+        // AMD's driver also advertises the extension on GPUs without matrix cores (GCN, RDNA1,
+        // RDNA2) and crashes in amdvlk64.dll building these pipelines on RDNA2. RDNA3 brought
+        // matrix cores together with accelerated mixed-signedness dot4, which the driver reports.
+        const VkDriverId driver_id = properties.driver.driverID;
+        const bool emulated_amd_matrices =
+            (driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+             driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE) &&
+            !properties.integer_dot_product.integerDotProduct4x8BitPackedMixedSignednessAccelerated;
+        if (extensions.cooperative_matrix && emulated_amd_matrices) {
+            LOG_INFO(Render_Vulkan,
+                     "VK_KHR_cooperative_matrix is emulated on this AMD GPU: guest tensor "
+                     "operations stay in shader emulation");
+        }
+        const bool no_matrix_units = IsAmdWithoutMatrixUnits(properties.properties.vendorID,
+                                                             properties.properties.deviceID);
+        if (no_matrix_units && extensions.cooperative_matrix) {
+            LOG_INFO(Render_Vulkan, "Cooperative matrices off: AMD GPU without matrix units");
+        }
+        // EDEN_NX2_NO_COOP_MATRIX=1 keeps HMMA on the software path, for A/B runs and for drivers
+        // the checks above miss (#634: amdvlk64.dll crash on an RX 6900 XT).
+        const char* const no_coop_matrix = std::getenv("EDEN_NX2_NO_COOP_MATRIX");
+        const bool forced_off = no_coop_matrix != nullptr && *no_coop_matrix != '\0' &&
+                                std::string_view{no_coop_matrix} != "0";
+        if (forced_off && extensions.cooperative_matrix) {
+            LOG_INFO(Render_Vulkan, "Cooperative matrices off: EDEN_NX2_NO_COOP_MATRIX is set");
+        }
+        const bool usable = extensions.cooperative_matrix && !emulated_amd_matrices &&
+                            !no_matrix_units && !forced_off &&
+                            features.cooperative_matrix.cooperativeMatrix &&
+                            (properties.cooperative_matrix.cooperativeMatrixSupportedStages &
+                             VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+                            features.shader_float16_int8.shaderFloat16 &&
+                            features.vulkan_memory_model.vulkanMemoryModel &&
+                            features.vulkan_memory_model.vulkanMemoryModelDeviceScope &&
+                            extensions.subgroup_size_control &&
+                            features.subgroup_size_control.computeFullSubgroups;
+        // Gated-off devices are not asked for their shapes.
+        const auto shapes = usable ? physical.GetCooperativeMatrixPropertiesKHR()
+                                   : std::vector<VkCooperativeMatrixPropertiesKHR>{};
+        const auto has_shape = [&](u32 columns) {
+            return std::ranges::any_of(shapes, [=](const VkCooperativeMatrixPropertiesKHR& shape) {
+                return shape.MSize == 16 && shape.NSize == columns && shape.KSize == 16 &&
+                       shape.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                       shape.BType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                       shape.CType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                       shape.ResultType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                       shape.saturatingAccumulation == VK_FALSE &&
+                       shape.scope == VK_SCOPE_SUBGROUP_KHR;
+            });
+        };
+        cooperative_hmma_16x8x16 =
+            usable && has_shape(8) &&
+            (properties.subgroup_properties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+            properties.subgroup_properties.subgroupSize == GuestWarpSize &&
+            // Compute subgroups may vary between these sizes (always with SPIR-V 1.6), and the
+            // per-lane matrix layout needs exactly the guest's 32 lanes.
+            properties.subgroup_size_control.minSubgroupSize == GuestWarpSize &&
+            properties.subgroup_size_control.maxSubgroupSize == GuestWarpSize;
+        cooperative_hmma_16x16x16 =
+            usable && has_shape(16) && IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+        extensions.cooperative_matrix = cooperative_hmma_16x8x16 || cooperative_hmma_16x16x16;
+        features.cooperative_matrix.cooperativeMatrixRobustBufferAccess = VK_FALSE;
+        RemoveExtensionFeatureIfUnsuitable(extensions.cooperative_matrix,
+                                           features.cooperative_matrix,
+                                           VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+    }
+
     // VK_KHR_workgroup_memory_explicit_layout
     extensions.workgroup_memory_explicit_layout =
         features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout &&
@@ -1797,6 +1924,12 @@ void Device::CollectPhysicalMemoryInfo() {
     device_access_memory = 0;
     u64 device_initial_usage = 0;
     u64 local_memory = 0;
+    u64 total_physical_vram = 0;
+    for (size_t element = 0; element < num_properties; ++element) {
+        if ((mem_properties.memoryHeaps[element].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+            total_physical_vram += mem_properties.memoryHeaps[element].size;
+        }
+    }
     // EDEN_NX2_VRAM_LIMIT_MIB=<n>: treat every device-local heap as n MiB (small card tests).
     if (const char* value = std::getenv("EDEN_NX2_VRAM_LIMIT_MIB")) {
         heap_size_limit = std::strtoull(value, nullptr, 10) << 20;
@@ -1807,6 +1940,15 @@ void Device::CollectPhysicalMemoryInfo() {
             LOG_WARNING(Render_Vulkan, "EDEN_NX2_VRAM_LIMIT_MIB={} is not a size in MiB, ignored",
                         value);
         }
+    } else if (Settings::values.yngvi_x3d_optimize.GetValue() && total_physical_vram > 0) {
+        // Yngvi's X3D Optimize: Auto-tune WDDM heap limit to 77% of physical VRAM.
+        // Prevents Windows DWM DirectFlip paging stutters and avoids over-committing VRAM on any card (6GB, 8GB, 10GB, 12GB, 16GB, 24GB+).
+        heap_size_limit = (total_physical_vram * 77) / 100;
+        LOG_INFO(Render_Vulkan,
+                 "[Yngvi's X3D Optimize] Auto-tuned WDDM heap limit to {} MiB ({:.1f} GiB / 77% of {} MiB)",
+                 heap_size_limit >> 20,
+                 static_cast<double>(heap_size_limit) / (1024.0 * 1024.0 * 1024.0),
+                 total_physical_vram >> 20);
     }
     const auto limit = [this](u64 size) {
         return heap_size_limit != 0 ? (std::min)(size, heap_size_limit) : size;

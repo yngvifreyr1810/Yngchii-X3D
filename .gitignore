@@ -67,3 +67,20 @@ vulkansdk*.exe
 
 # Build-time generated external sources
 externals/generated
+
+# Yngchii-X3D Cleanliness & Anti-Copyright Audit Rules
+*.profdata
+*.bin
+*.prewarmed
+*.nsp
+*.xci
+*.nca
+*.nro
+*.keys
+user/
+nand/
+keys/
+shader/
+build*/
+[Bb]uild*/
+

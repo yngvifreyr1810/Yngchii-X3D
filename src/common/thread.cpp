@@ -5,16 +5,25 @@
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <atomic>
+#include <bit>
 #include <chrono>
-#include <limits>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "common/adpf.h"
 #include "common/error.h"
+#include "common/event_wait.h"
 #include "common/logging.h"
+#include "common/nx2_sample_profile.h"
 #include "common/assert.h"
+#include "common/settings.h"
 #include "common/thread.h"
+#include "common/thread_pinning.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
 #elif defined(__HAIKU__)
@@ -447,6 +456,162 @@ void RememberCurrentThreadNice(pid_t tid, s32 nice_value) {
 #include "common/x64/rdtsc.h"
 #endif
 
+#ifdef _WIN32
+namespace {
+// Hybrid CPUs (Intel P/E cores): Windows alone may run the emulator's time-critical threads on an
+// efficiency core, where a frame takes much longer. Keep them on the fastest cores with CPU sets
+// (a soft affinity the power manager respects) and background workers on the slower ones.
+// EDEN_HYBRID_CORES=0 turns this off.
+struct WindowsCpuSets {
+    std::vector<ULONG> performance;
+    std::vector<ULONG> efficiency;
+    bool hybrid = false;
+};
+
+const WindowsCpuSets& CpuSets() {
+    static const WindowsCpuSets sets = [] {
+        WindowsCpuSets result;
+        if (const char* text = std::getenv("EDEN_HYBRID_CORES");
+            text != nullptr && std::strtol(text, nullptr, 10) == 0) {
+            LOG_INFO(Common, "Hybrid core placement off (EDEN_HYBRID_CORES=0)");
+            return result;
+        }
+        using PFN_GetSystemCpuSetInformation = BOOL(WINAPI*)(PSYSTEM_CPU_SET_INFORMATION, ULONG,
+                                                             PULONG, HANDLE, ULONG);
+        const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        const auto get = reinterpret_cast<PFN_GetSystemCpuSetInformation>(
+            reinterpret_cast<void*>(GetProcAddress(kernel32, "GetSystemCpuSetInformation")));
+        if (get == nullptr) {
+            return result;
+        }
+        ULONG length = 0;
+        get(nullptr, 0, &length, GetCurrentProcess(), 0);
+        if (length == 0) {
+            return result;
+        }
+        std::vector<u8> buffer(length);
+        if (!get(reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buffer.data()), length, &length,
+                 GetCurrentProcess(), 0)) {
+            return result;
+        }
+        struct Entry {
+            ULONG id;
+            u8 efficiency_class;
+        };
+        std::vector<Entry> entries;
+        u8 best = 0;
+        for (ULONG offset = 0; offset + sizeof(SYSTEM_CPU_SET_INFORMATION) <= length;) {
+            const auto* info =
+                reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + offset);
+            if (info->Size == 0) {
+                break;
+            }
+            if (info->Type == CpuSetInformation) {
+                entries.push_back({info->CpuSet.Id, info->CpuSet.EfficiencyClass});
+                best = (std::max)(best, static_cast<u8>(info->CpuSet.EfficiencyClass));
+            }
+            offset += info->Size;
+        }
+        for (const Entry& entry : entries) {
+            (entry.efficiency_class == best ? result.performance : result.efficiency)
+                .push_back(entry.id);
+        }
+        result.hybrid = !result.efficiency.empty() && result.performance.size() >= 2;
+        if (result.hybrid) {
+            LOG_INFO(Common,
+                     "Hybrid CPU: {} performance and {} efficiency logical processors, "
+                     "time-critical threads stay on the performance cores",
+                     result.performance.size(), result.efficiency.size());
+        }
+        return result;
+    }();
+    return sets;
+}
+
+void SelectCurrentThreadCpuSets(const std::vector<ULONG>& ids) {
+    using PFN_SetThreadSelectedCpuSets = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
+    static const auto set = reinterpret_cast<PFN_SetThreadSelectedCpuSets>(reinterpret_cast<void*>(
+        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadSelectedCpuSets")));
+    if (set == nullptr) {
+        return;
+    }
+    if (!set(GetCurrentThread(), ids.empty() ? nullptr : ids.data(),
+             static_cast<ULONG>(ids.size()))) {
+        LOG_WARNING(Common, "SetThreadSelectedCpuSets failed: {}", Common::GetLastErrorMsg());
+    }
+}
+
+/// Masks of processor group 0's logical processors that share a `relation` (a physical core, or
+/// with RelationCache an L3 cache).
+std::vector<KAFFINITY> GroupZeroMasks(LOGICAL_PROCESSOR_RELATIONSHIP relation) {
+    std::vector<KAFFINITY> result;
+    DWORD length = 0;
+    GetLogicalProcessorInformationEx(relation, nullptr, &length);
+    std::vector<u8> buffer(length);
+    auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
+    if (length == 0 || !GetLogicalProcessorInformationEx(relation, info, &length)) {
+        return result;
+    }
+    for (DWORD offset = 0; offset < length;) {
+        auto* entry =
+            reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
+        if (entry->Relationship == RelationProcessorCore && entry->Processor.GroupCount > 0 &&
+            entry->Processor.GroupMask[0].Group == 0) {
+            result.push_back(entry->Processor.GroupMask[0].Mask);
+        } else if (entry->Relationship == RelationCache && entry->Cache.Level == 3 &&
+                   entry->Cache.GroupMask.Group == 0) {
+            result.push_back(entry->Cache.GroupMask.Mask);
+        }
+        offset += entry->Size;
+    }
+    return result;
+}
+
+/// Logical processors PinCurrentThread gave the GPU front and back threads (including SMT siblings).
+std::atomic<u64> pinned_gpu_mask{};
+std::atomic<u64> pinned_guest_mask{};
+
+Common::ThreadPinning::Topology ReadPinningTopology() {
+    Common::ThreadPinning::Topology topology;
+    DWORD length = 0;
+    GetLogicalProcessorInformationEx(RelationAll, nullptr, &length);
+    std::vector<u8> buffer(length);
+    if (length == 0 ||
+        !GetLogicalProcessorInformationEx(
+            RelationAll, reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data()),
+            &length)) {
+        return topology;
+    }
+    for (DWORD offset = 0; offset < length;) {
+        const auto* entry = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+            buffer.data() + offset);
+        if (entry->Size == 0) {
+            break;
+        }
+        if (entry->Relationship == RelationProcessorCore) {
+            const PROCESSOR_RELATIONSHIP& core = entry->Processor;
+            for (WORD i = 0; i < core.GroupCount; ++i) {
+                topology.logical_processors +=
+                    static_cast<u32>(std::popcount(static_cast<u64>(core.GroupMask[i].Mask)));
+            }
+            if (core.GroupCount > 0 && core.GroupMask[0].Group == 0) {
+                topology.cores.push_back(
+                    {static_cast<u64>(core.GroupMask[0].Mask), core.EfficiencyClass});
+            }
+        } else if (entry->Relationship == RelationCache) {
+            const CACHE_RELATIONSHIP& cache = entry->Cache;
+            if (cache.Level == 3 && cache.Type != CacheInstruction &&
+                cache.GroupMask.Group == 0) {
+                topology.l3.push_back({static_cast<u64>(cache.GroupMask.Mask), cache.CacheSize});
+            }
+        }
+        offset += entry->Size;
+    }
+    return topology;
+}
+} // Anonymous namespace
+#endif
+
 namespace Common {
 
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
@@ -504,13 +669,17 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
 }
 
 void SetCurrentThreadName(const char* name) {
-#ifdef _MSC_VER
-    // Sets the debugger-visible name of the current thread.
-    if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)
-        pf(GetCurrentThread(), UTF8ToUTF16W(name).data()); // Windows 10+
-    else
-        ; // No-op
-#elif  defined(__APPLE__)
+    Nx2SampleProfile::OnThreadNamed(name);
+#ifdef _WIN32
+    // Sets the debugger-visible name of the current thread (both MSVC and MinGW Clang).
+    using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+    if (const auto kernel_base = GetModuleHandleW(L"KernelBase.dll")) {
+        if (const auto pf = reinterpret_cast<SetThreadDescriptionFn>(
+                reinterpret_cast<void*>(GetProcAddress(kernel_base, "SetThreadDescription")))) {
+            pf(GetCurrentThread(), UTF8ToUTF16W(name).data()); // Windows 10+
+        }
+    }
+#elif defined(__APPLE__)
     pthread_setname_np(name);
 #elif defined(__HAIKU__)
     rename_thread(find_thread(NULL), name);
@@ -529,11 +698,6 @@ void SetCurrentThreadName(const char* name) {
         buf[len] = '\0';
         pthread_setname_np(pthread_self(), buf);
     }
-#elif defined(_WIN32)
-    // MinGW with the POSIX threading model does not support pthread_setname_np
-    // See for reference
-    // https://gitlab.freedesktop.org/mesa/mesa/-/blame/main/src/util/u_thread.c?ref_type=heads#L75
-    (void)name;
 #else
     pthread_setname_np(pthread_self(), name);
 #endif
@@ -546,6 +710,124 @@ void SetCurrentThreadToPerformanceCores() {
         return;
     }
     SetCurrentThreadCoreGroup(CoreGroup::Performance);
+#elif defined(_WIN32)
+    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+        SelectCurrentThreadCpuSets(sets.performance);
+    }
+#endif
+}
+
+void PinCurrentThread(PinnedRole role) {
+#ifdef _WIN32
+    if (!Settings::values.yngvi_x3d_optimize.GetValue() && std::getenv("EDEN_NX2_PIN_THREADS") == nullptr) {
+        return;
+    }
+    // Off with EDEN_NX2_PIN_THREADS=0, forced with 1, otherwise on with enough performance cores
+    // (ThreadPinning::MakePlan): the split's back did about 8% more draws a second at Lake Hylia
+    // (Ryzen 7 7800X3D), its worst window 29 -> 54 fps, once no SMT sibling shared its core.
+    static const ThreadPinning::Plan plan = [] {
+        const auto mode = ThreadPinning::ParseMode(std::getenv("EDEN_NX2_PIN_THREADS"));
+        const ThreadPinning::Topology topology = ReadPinningTopology();
+        const ThreadPinning::Plan result = ThreadPinning::MakePlan(topology, mode);
+        LOG_INFO(Common, "Thread pinning: {}", ThreadPinning::Describe(result, topology, mode));
+        return result;
+    }();
+    u64 mask{};
+    switch (role) {
+    case PinnedRole::GpuFront:
+        mask = plan.front;
+        break;
+    case PinnedRole::GpuBack:
+        mask = plan.back;
+        break;
+    case PinnedRole::GuestCore:
+        mask = plan.guest;
+        break;
+    }
+    if (mask != 0) {
+        GROUP_AFFINITY affinity{};
+        affinity.Mask = static_cast<KAFFINITY>(mask);
+        affinity.Group = 0;
+        if (!SetThreadGroupAffinity(GetCurrentThread(), &affinity, nullptr)) {
+            LOG_WARNING(Common, "Could not pin thread: {}", GetLastErrorMsg());
+        } else if (role != PinnedRole::GuestCore) {
+            pinned_gpu_mask.fetch_or(plan.gpu_cores != 0 ? plan.gpu_cores : mask,
+                                     std::memory_order_relaxed);
+        } else {
+            pinned_guest_mask.fetch_or(mask, std::memory_order_relaxed);
+        }
+    }
+#else
+    (void)role;
+#endif
+}
+
+u64 BackgroundWorkCpuMask() {
+#ifdef _WIN32
+    const u64 pinned = pinned_gpu_mask.load(std::memory_order_relaxed);
+    if (pinned == 0) {
+        return 0;
+    }
+    DWORD_PTR process{};
+    DWORD_PTR system{};
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) {
+        return 0;
+    }
+    const u64 rest = static_cast<u64>(process) & ~pinned;
+    if (rest == 0) {
+        return 0;
+    }
+    // Several L3 caches (Ryzen 9 with two CCDs): the other CCD's cores, so the work does not
+    // evict what the GPU threads keep in theirs, when that leaves enough of them.
+    static const std::vector<KAFFINITY> l3_caches = GroupZeroMasks(RelationCache);
+    u64 other_caches = rest;
+    for (const KAFFINITY cache : l3_caches) {
+        if ((static_cast<u64>(cache) & pinned) != 0) {
+            other_caches &= ~static_cast<u64>(cache);
+        }
+    }
+    if (std::popcount(other_caches) >= 4) {
+        return other_caches;
+    }
+    // Single-CCD 8-core SMT (e.g. Ryzen 7 7800X3D): confine background workers to the idle
+    // secondary SMT threads of Core 0 and the outer 3 cores (0xa802 = 4 LPs) so GPUFront, GPUBack,
+    // and the 6 primary GuestCore threads never share an active core unnecessarily.
+    const u64 guest = pinned_guest_mask.load(std::memory_order_relaxed);
+    const u64 non_guest = rest & ~guest;
+    const u64 bg_compact = (non_guest & 0x3ULL) | (non_guest & 0xa800ULL);
+    if (std::popcount(bg_compact) >= 4) {
+        return bg_compact;
+    }
+    if (std::popcount(non_guest) >= 4) {
+        return non_guest;
+    }
+    return rest;
+#else
+    return 0;
+#endif
+}
+
+void SetCurrentThreadCpuMask(u64 mask) {
+#ifdef _WIN32
+    if (mask == 0) {
+        DWORD_PTR process{};
+        DWORD_PTR system{};
+        if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system) || process == 0) {
+            return;
+        }
+        mask = process;
+    }
+    SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(mask));
+#else
+    static_cast<void>(mask);
+#endif
+}
+
+void SetCurrentThreadIdlePriority() {
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE);
+#else
+    SetCurrentThreadPriority(ThreadPriority::Low);
 #endif
 }
 
@@ -556,6 +838,10 @@ void SetCurrentThreadToEfficiencyCores() {
         return;
     }
     SetCurrentThreadCoreGroup(CoreGroup::Efficiency);
+#elif defined(_WIN32)
+    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+        SelectCurrentThreadCpuSets(sets.efficiency);
+    }
 #endif
 }
 
@@ -563,6 +849,10 @@ void SetCurrentThreadToBackgroundWork() {
 #if defined(__ANDROID__)
     ADPF::AddCurrentThread(ADPF::Session::Background);
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
+#elif defined(_WIN32)
+    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+        SelectCurrentThreadCpuSets({});
+    }
 #endif
 }
 
@@ -570,6 +860,10 @@ void SetCurrentThreadToAllCores() {
 #if defined(__ANDROID__)
     ADPF::RemoveCurrentThread();
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
+#elif defined(_WIN32)
+    if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
+        SelectCurrentThreadCpuSets({});
+    }
 #endif
 }
 
@@ -646,31 +940,30 @@ __attribute__((target("waitpkg,mwaitx")))
 #endif
 bool Event::WaitFor(const std::chrono::nanoseconds time) {
 #ifdef _WIN32
-    auto const start = Common::X64::FencedRDTSC();
     auto const& caps = Common::g_cpu_caps;
-    [[maybe_unused]] auto const end = start + Common::g_wall_clock.NsToTicks(time);
+    const auto deadline = EventWaitDeadline(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()), time);
+    const auto remaining = [deadline] {
+        return deadline - std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch());
+    };
+    const u64 ticks_per_second = Common::g_wall_clock.NsToTicks(std::chrono::seconds{1});
     if (caps.monitorx) {
         while (true) {
             // Armed monitor, as per manual, MWAITX must be conditional if the condition isn't satisfied
             // to prevent a race condition.
             _mm_monitorx(reinterpret_cast<u64*>(std::addressof(is_set)), 0, 0);
             if (!is_set.load()) {
-                // RDTSC may be fenced here due to atomic load
-#ifdef _MSC_VER
-                auto const now = __rdtsc();
-#else
-                auto const now = _rdtsc();
-#endif
-                if (end > now) {
-                    u32 const cycles = std::min<u32>((std::numeric_limits<u32>::max)(), s64(end) - s64(now));
+                const u32 cycles = MwaitxTimeoutCycles(remaining(), ticks_per_second);
+                if (cycles != 0) {
                     // See here: https://github.com/torvalds/linux/blob/948a64995aca6820abefd17f1a4258f5835c5ad9/arch/x86/lib/delay.c#L93
                     // MWAITX accepts a 32-bit input timer which determines the total number of cycles to wait for
                     // NOT THE TOTAL ABSOLUTE TSC VALUE, it's just a delta
                     // BIT[1] = use a timer
                     // Hint = 0: Use C1 state when sleepy (means slower wakeup but better savings)
                     _mm_mwaitx(1 << 1, 0u, cycles);
-                    if (!is_set.load())
-                        return false;
+                    continue;
                 } else
                     return false; //timeout
             }
@@ -678,31 +971,36 @@ bool Event::WaitFor(const std::chrono::nanoseconds time) {
             if (is_set.compare_exchange_weak(expected, false, std::memory_order_release))
                 return true;
         }
-    } else if (caps.waitpkg) {
+    }
+    if (caps.waitpkg) {
         // #UD If CPUID.7.0:ECX.WAITPKG[bit 5]=0.
         while (true) {
             _umonitor(std::addressof(is_set));
-            if (!is_set.load() && !_umwait(0, end)) //umwait is absolute time!!!
-                return false;
+            if (!is_set.load()) {
+                // UMWAIT also wakes early on interrupts, and its result (CF) only reports the OS
+                // limit (IA32_UMWAIT_CONTROL). Wait again until the deadline, as for MWAITX. The
+                // bounded budget keeps the absolute TSC deadline from wrapping.
+                const u32 cycles = MwaitxTimeoutCycles(remaining(), ticks_per_second);
+                if (cycles == 0)
+                    return false; // timeout
+                _umwait(0, Common::X64::FencedRDTSC() + cycles); // umwait is absolute time!!!
+                continue;
+            }
             bool expected = true;
             if (is_set.compare_exchange_weak(expected, false, std::memory_order_release))
                 return true;
         }
-    } else {
-#ifdef _MSC_VER
-        while (!is_set.load() && end > __rdtsc())
-            Common::Windows::SleepForOneTick();
-#else
-        while (!is_set.load() && end > _rdtsc())
-            Common::Windows::SleepForOneTick();
-#endif
-        if (is_set.load())
-            Reset();
-        return true;
     }
+    while (!is_set.load() && remaining() > std::chrono::nanoseconds::zero())
+        Common::Windows::SleepForOneTick();
+    bool expected = true;
+    return is_set.compare_exchange_strong(expected, false, std::memory_order_release);
 #else
     std::unique_lock lk{mutex};
-    if (!condvar.wait_for(lk, time, [this] { return is_set.load(); }))
+    const auto now = std::chrono::steady_clock::now();
+    const auto deadline = std::chrono::steady_clock::time_point{EventWaitDeadline(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()), time)};
+    if (!condvar.wait_until(lk, deadline, [this] { return is_set.load(); }))
         return false;
     is_set = false;
     return true;
@@ -719,7 +1017,10 @@ bool Event::WaitFor(const std::chrono::nanoseconds time) {
     return true;
 #else
     std::unique_lock lk{mutex};
-    if (!condvar.wait_for(lk, time, [this] { return is_set.load(); }))
+    const auto now = std::chrono::steady_clock::now();
+    const auto deadline = std::chrono::steady_clock::time_point{EventWaitDeadline(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()), time)};
+    if (!condvar.wait_until(lk, deadline, [this] { return is_set.load(); }))
         return false;
     is_set = false;
     return true;

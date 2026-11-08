@@ -32,6 +32,9 @@
 #endif
 
 #include "main_window.h"
+#ifdef ENABLE_UPDATE_CHECKER
+#include "updater/update_dialog.h"
+#endif
 
 #ifdef _WIN32
 #include <QScreen>
@@ -137,9 +140,23 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 #endif
 }
 
+// Built into the Frizti builds so players don't have to set anything: the switches tuned for
+// Ocarina of Time. Either nx2_switches.txt overrides any of them (=0 turns one off).
+constexpr std::pair<const char*, const char*> BuiltinSwitches[] = {
+    {"EDEN_NX2_GRAPHICS_SSBO_BARE", "0"}, {"EDEN_NX2_WRITTEN_SSBO_MARK_KIB", "64"},
+    {"EDEN_NX2_ACQUIRE_PRECHECK", "2"},   {"EDEN_NX2_MACRO_SINK", "1"},
+    {"EDEN_NX2_COMPUTE_SINK", "1"},       {"EDEN_NX2_RING_PAIRS", "1"},
+    {"EDEN_NX2_UBO_INPLACE", "1"},        {"EDEN_NX2_PIPELINE_CLEAN", "1"},
+    {"EDEN_NX2_LIST_WAIT_SKIP", "1"},     {"EDEN_NX2_PREFLUSH", "1"},
+    {"EDEN_NX2_SEM_FAST", "2"},
+};
+
 static void LoadNx2Switches(const char* argv0) {
     // Later files overwrite earlier entries; the real environment is checked only at the end.
     std::map<std::string, std::string> entries;
+    for (const auto& [name, value] : BuiltinSwitches) {
+        entries.emplace(name, value);
+    }
     if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {
         ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
     }
@@ -162,6 +179,10 @@ static void LoadNx2Switches(const char* argv0) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef ENABLE_UPDATE_CHECKER
+    // Before the switches are added to the environment, which a restart must not inherit.
+    Updater::PrepareLaunch();
+#endif
     LoadNx2Switches(argv[0]);
 #if YUZU_ROOM
     bool launch_room = false;
@@ -194,7 +215,7 @@ int main(int argc, char* argv[]) {
 
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("eden"));
-    QCoreApplication::setApplicationName(QStringLiteral("Lichii"));
+    QCoreApplication::setApplicationName(QStringLiteral("Yngchii-X3D"));
 
     // Increases the maximum open file limit.
     // TODO: This should be common to all frontends.
@@ -265,6 +286,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     QApplication app(argc, argv);
+    app.setWindowIcon(QIcon(QStringLiteral(":/img/lichii.ico")));
 
 #ifdef _WIN32
     OverrideWindowsFont();

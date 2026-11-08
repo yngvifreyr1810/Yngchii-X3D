@@ -89,10 +89,12 @@ void Config::WriteToIni() const {
 
     CSimpleIniA::FileWriter writer(fp);
     const SI_Error rc = config->Save(writer, false);
+    fclose(fp);
     if (rc < 0) {
         LOG_ERROR(Frontend, "Config file could not be saved!");
+    } else if (on_written) {
+        on_written(*this);
     }
-    fclose(fp);
 }
 
 void Config::SetUpIni() {
@@ -1079,7 +1081,9 @@ void Config::SetArrayIndex(const int index) {
     const int array_index = index + 1;
 
     // You can't exceed the known max size of the array by more than 1
-    ASSERT(array_stack.front().size + 1 >= array_index);
+    // sergio: check the innermost array, not the outermost (nested arrays such as
+    // DisabledAddOns/<n>/disabled asserted on every entry past the outer size).
+    ASSERT(array_stack.back().size + 1 >= array_index);
 
     // Change the config array size to the current index since you may want
     // to reduce the number of elements that you read back from the config

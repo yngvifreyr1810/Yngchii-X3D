@@ -255,12 +255,17 @@ u64 DynarmicCallbacks64::GetCNTPCT() {
         return value == nullptr || value[0] != '0';
     }();
     if (pause_spins && ticks - m_last_cntpct < m_spin_ticks) {
+        const u32 pauses = ++m_spin_streak > 32U ? 8U : 2U;
 #if defined(_M_X64) || defined(__x86_64__)
-        _mm_pause();
-        _mm_pause();
+        for (u32 i = 0; i < pauses; ++i) {
+            _mm_pause();
+        }
 #elif defined(__aarch64__)
+        (void)pauses;
         asm volatile("yield");
 #endif
+    } else {
+        m_spin_streak = 0;
     }
     m_last_cntpct = ticks;
     return ticks;

@@ -78,6 +78,10 @@ void ConfigureCpu::Setup(const ConfigurationShared::Builder& builder) {
             backend_combobox = widget->combobox;
         } else if (setting->Id() == Settings::values.cpu_ticks.Id()) {
             ui->general_layout->addWidget(widget);
+        } else if (setting->Id() == Settings::values.yngvi_x3d_optimize.Id()) {
+            // Managed in ConfigureGeneral UI
+            widget->deleteLater();
+            continue;
         } else {
             // Presently, all other settings here are unsafe checkboxes
             unsafe_hold.insert({setting->Id(), widget});

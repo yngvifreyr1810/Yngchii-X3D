@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <thread>
 
+#include "common/win32_futex.h"
+
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -19,8 +21,20 @@ namespace Common {
 /// wake-up took longer than the critical section (title 1's GPU thread spent ~8% asleep there).
 class SpinRecursiveMutex {
 public:
+#if defined(_WIN32) && defined(__x86_64__)
+    using ThreadToken = std::uintptr_t;
+    static ThreadToken CurrentThreadToken() noexcept {
+        return Futex::FastThreadToken();
+    }
+#else
+    using ThreadToken = std::thread::id;
+    static ThreadToken CurrentThreadToken() noexcept {
+        return std::this_thread::get_id();
+    }
+#endif
+
     void lock() {
-        const std::thread::id self = std::this_thread::get_id();
+        const ThreadToken self = CurrentThreadToken();
         if (owner.load(std::memory_order_relaxed) == self) {
             ++depth;
             return;
@@ -35,7 +49,7 @@ public:
     }
 
     bool try_lock() {
-        const std::thread::id self = std::this_thread::get_id();
+        const ThreadToken self = CurrentThreadToken();
         if (owner.load(std::memory_order_relaxed) == self) {
             ++depth;
             return true;
@@ -54,15 +68,15 @@ public:
         if (--depth != 0) {
             return;
         }
-        owner.store(std::thread::id{}, std::memory_order_relaxed);
+        owner.store(ThreadToken{}, std::memory_order_relaxed);
         if (state.exchange(0, std::memory_order_release) == 2) {
-            state.notify_one();
+            Futex::WakeOne32(state);
         }
     }
 
 private:
-    // About 10 microseconds of spinning before sleeping.
-    static constexpr int SpinCount = 1024;
+    // Spin ~20 us before entering kernel futex wait on 8-core Zen 4.
+    static constexpr int SpinCount = 2048;
 
     static void Pause() {
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
@@ -86,12 +100,12 @@ private:
         // 2: held with (possible) sleepers; taken this way it stays marked, so its unlock wakes
         // the next sleeper.
         while (state.exchange(2, std::memory_order_acquire) != 0) {
-            state.wait(2, std::memory_order_relaxed);
+            Futex::Wait32(state, 2);
         }
     }
 
     std::atomic<std::uint32_t> state{0}; ///< 0 free, 1 held, 2 held with sleepers
-    std::atomic<std::thread::id> owner{};
+    std::atomic<ThreadToken> owner{};
     std::uint32_t depth{}; ///< Recursion depth, touched only by the owner
 };
 

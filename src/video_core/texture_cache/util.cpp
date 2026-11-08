@@ -28,6 +28,8 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/guest_memory.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_perf.h"
 #include "video_core/surface.h"
 #include "video_core/texture_cache/decode_bc.h"
 #include "video_core/texture_cache/format_lookup_table.h"
@@ -37,6 +39,7 @@
 #include "video_core/textures/astc.h"
 #include "video_core/textures/bcn.h"
 #include "video_core/textures/decoders.h"
+#include "video_core/textures/unswizzle_worker.h"
 
 namespace VideoCommon {
 
@@ -850,11 +853,9 @@ bool IsValidEntry(const Tegra::MemoryManager& gpu_memory, const TICEntry& config
     return gpu_memory.GpuToCpuAddress(address, guest_size_bytes).has_value();
 }
 
-boost::container::small_vector<BufferImageCopy, 16> UnswizzleImage(Tegra::MemoryManager& gpu_memory,
-                                                                   GPUVAddr gpu_addr,
-                                                                   const ImageInfo& info,
-                                                                   std::span<const u8> input,
-                                                                   std::span<u8> output) {
+boost::container::small_vector<BufferImageCopy, 16> UnswizzleImage(
+    Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const ImageInfo& info,
+    std::span<const u8> input, std::span<u8> output, Tegra::Texture::UnswizzleWorker* worker) {
     const size_t guest_size_bytes = input.size_bytes();
     const u32 bpp_log2 = BytesPerBlockLog2(info.format);
     const Extent2D tile_size = DefaultBlockSize(info.format);
@@ -919,8 +920,25 @@ boost::container::small_vector<BufferImageCopy, 16> UnswizzleImage(Tegra::Memory
         for (s32 layer = 0; layer < info.resources.layers; ++layer) {
             const std::span<u8> dst = output.subspan(host_offset);
             const std::span<const u8> src = input.subspan(guest_offset + guest_layer_offset);
-            UnswizzleTexture(dst, src, 1U << bpp_log2, num_tiles.width, num_tiles.height,
-                             num_tiles.depth, block.height, block.depth, stride_alignment, gpu_memory.UsesNativeTiling());
+            // EDEN_NX2_EXP8 bit 4: large 2D levels untiled in bands on the transcode workers too
+            // (only from the texture cache's own thread, which passes a worker).
+            const bool banded = worker && info.type == ImageType::e2D && info.num_samples == 1 &&
+                                (VideoCore::Nx2Debug::Experiment(8) & 4) != 0 &&
+                                Tegra::Texture::TryUnswizzleBands(
+                                    dst.first(host_bytes_per_layer), src.first(level_sizes[level]),
+                                    1U << bpp_log2, num_tiles.width, num_tiles.height,
+                                    num_tiles.depth, block.height, block.depth, stride_alignment,
+                                    gpu_memory.UsesNativeTiling(), Nx2Perf::Verify());
+            if (!banded && (!worker || !Nx2Perf::On(Nx2Perf::Opt::UnswizzleWorkers) ||
+                info.type != ImageType::e2D || info.num_samples != 1 ||
+                !worker->TryUnswizzle(
+                    dst.first(host_bytes_per_layer), src.first(level_sizes[level]), 1U << bpp_log2,
+                    num_tiles.width, num_tiles.height, num_tiles.depth, block.height, block.depth,
+                    stride_alignment, gpu_memory.UsesNativeTiling(), Nx2Perf::Verify()))) {
+                UnswizzleTexture(dst, src, 1U << bpp_log2, num_tiles.width, num_tiles.height,
+                                 num_tiles.depth, block.height, block.depth, stride_alignment,
+                                 gpu_memory.UsesNativeTiling());
+            }
             guest_layer_offset += layer_stride;
             host_offset += host_bytes_per_layer;
         }

@@ -122,7 +122,6 @@ ConfigureDialog::~ConfigureDialog() = default;
 void ConfigureDialog::SetConfiguration() {}
 
 void ConfigureDialog::ApplyConfiguration() {
-    general_tab->ApplyConfiguration();
     ui_tab->ApplyConfiguration();
     system_tab->ApplyConfiguration();
     profile_tab->ApplyConfiguration();
@@ -138,6 +137,7 @@ void ConfigureDialog::ApplyConfiguration() {
     web_tab->ApplyConfiguration();
     network_tab->ApplyConfiguration();
     applets_tab->ApplyConfiguration();
+    general_tab->ApplyConfiguration();
     system.ApplySettings();
     Settings::LogSettings();
 }

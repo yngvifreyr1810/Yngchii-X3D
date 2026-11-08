@@ -8,6 +8,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 // Eden's Xbyak configuration (its hash maps): every translation unit must see the same one.
@@ -26,6 +27,15 @@ class TuringMacroJit {
 public:
     using Word = std::uint32_t;
     using Result = TuringMacroInterpreter::Result;
+
+    struct FastState {
+        const Word* read_regs = nullptr;
+        Word read_limit = 0;
+        const Word* skip_regs = nullptr;
+        const Word* skip_shadow = nullptr;
+        const std::uint8_t* skip_allow = nullptr;
+        Word skip_limit = 0;
+    };
 
     struct State {
         std::array<Word, 24> regs;
@@ -53,6 +63,12 @@ public:
         bool (*emit)(State*, Word method, Word value);
         Word (*read)(State*, Word address);
         const std::vector<Word>* fifo;
+        const Word* fast_read_regs;
+        const Word* fast_skip_regs;
+        const Word* fast_skip_shadow;
+        const std::uint8_t* fast_skip_allow;
+        Word fast_read_limit;
+        Word fast_skip_limit;
     };
 
     enum Error : Word {
@@ -102,6 +118,12 @@ public:
     template <typename Read, typename Emit>
     Result Execute(Word start, std::vector<Word>& parameters, std::span<Word> data_ram, Read read,
                    Emit emit) {
+        return Execute(start, parameters, data_ram, read, emit, FastState{});
+    }
+
+    template <typename Read, typename Emit>
+    Result Execute(Word start, std::vector<Word>& parameters, std::span<Word> data_ram, Read read,
+                   Emit emit, const FastState& fast) {
         State state;
         state.regs.fill(0);
         state.carry = state.method = state.increment = 0;
@@ -115,6 +137,15 @@ public:
         state.params_size = static_cast<Word>(parameters.size());
         state.dram = data_ram.data();
         state.fifo = &parameters;
+        state.fast_read_regs = fast.read_regs;
+        state.fast_skip_regs = fast.skip_regs;
+        state.fast_skip_shadow = fast.skip_shadow;
+        state.fast_skip_allow = fast.skip_allow;
+        state.fast_read_limit = fast.read_regs != nullptr ? fast.read_limit : 0;
+        state.fast_skip_limit =
+            (fast.skip_regs != nullptr && fast.skip_shadow != nullptr && fast.skip_allow != nullptr)
+                ? fast.skip_limit
+                : 0;
         Thunks<Read, Emit> thunks{read, emit};
         state.user = &thunks;
         state.emit = &Thunks<Read, Emit>::CallEmit;
@@ -132,7 +163,12 @@ private:
         Read& read;
         Emit& emit;
         static bool CallEmit(State* state, Word method, Word value) {
-            const bool ok = static_cast<Thunks*>(state->user)->emit(method, value);
+            bool ok;
+            if constexpr (std::is_invocable_v<Emit, Word, Word, State*>) {
+                ok = static_cast<Thunks*>(state->user)->emit(method, value, state);
+            } else {
+                ok = static_cast<Thunks*>(state->user)->emit(method, value);
+            }
             // MME_DMA_READ_FIFOED appends to the FIFO from inside the emit.
             state->params = state->fifo->data();
             state->params_size = static_cast<Word>(state->fifo->size());
@@ -390,13 +426,28 @@ private:
                     mov(dword[st + offsetof(State, increment)], eax);
                 }
                 if (d.out_emit[lane]) {
+                    Xbyak::Label slow_emit, after_emit;
                     Output(eax, d, d.out_emit[lane]);
+                    mov(ecx, dword[st + offsetof(State, method)]);
+                    cmp(ecx, dword[st + offsetof(State, fast_skip_limit)]);
+                    jae(slow_emit);
+                    mov(r9, qword[st + offsetof(State, fast_skip_allow)]);
+                    cmp(byte[r9 + rcx], 0);
+                    je(slow_emit);
+                    mov(r9, qword[st + offsetof(State, fast_skip_shadow)]);
+                    cmp(dword[r9 + rcx * 4], eax);
+                    jne(slow_emit);
+                    mov(r9, qword[st + offsetof(State, fast_skip_regs)]);
+                    cmp(dword[r9 + rcx * 4], eax);
+                    je(after_emit);
+                    L(slow_emit);
                     mov(arg2.cvt32(), eax);
-                    mov(arg1.cvt32(), dword[st + offsetof(State, method)]);
+                    mov(arg1.cvt32(), ecx);
                     mov(arg0, st);
                     call(ptr[st + offsetof(State, emit)]);
                     test(al, al);
                     jz(fail_emit, T_NEAR);
+                    L(after_emit);
                     mov(eax, dword[st + offsetof(State, increment)]);
                     add(dword[st + offsetof(State, method)], eax);
                 }
@@ -581,13 +632,27 @@ private:
                 Compare(op);
                 neg(eax);
                 return;
-            case 22:
+            case 22: {
+                Xbyak::Label slow_read, out_of_bounds, done_read;
                 lea(eax, ptr[rcx + rdx]);
                 and_(eax, 0xffff);
+                cmp(qword[st + offsetof(State, fast_read_regs)], 0);
+                je(slow_read);
+                cmp(eax, dword[st + offsetof(State, fast_read_limit)]);
+                jae(out_of_bounds);
+                mov(r9, qword[st + offsetof(State, fast_read_regs)]);
+                mov(eax, dword[r9 + rax * 4]);
+                jmp(done_read);
+                L(out_of_bounds);
+                xor_(eax, eax);
+                jmp(done_read);
+                L(slow_read);
                 mov(arg1.cvt32(), eax);
                 mov(arg0, st);
                 call(ptr[st + offsetof(State, read)]);
+                L(done_read);
                 return;
+            }
             case 23: {
                 if (imm < 2) {
                     jmp(fail_loop, T_NEAR);

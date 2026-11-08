@@ -72,6 +72,9 @@ endif()
 ]]
 
 function(FixMsysPath target)
+    if (NOT TARGET ${target})
+        return()
+    endif()
     get_target_property(include_dir ${target} INTERFACE_INCLUDE_DIRECTORIES)
 
     if (NOT (include_dir MATCHES "^/"))

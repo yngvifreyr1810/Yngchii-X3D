@@ -50,6 +50,8 @@ ConfigureGeneral::~ConfigureGeneral() = default;
 
 void ConfigureGeneral::SetConfiguration() {
     UpdateExternalContentList();
+    ui->check_yngvi_x3d->setChecked(Settings::values.yngvi_x3d_optimize.GetValue());
+    ui->check_discord_presence->setChecked(UISettings::values.enable_discord_presence.GetValue());
 }
 
 void ConfigureGeneral::Setup(const ConfigurationShared::Builder& builder) {
@@ -111,6 +113,8 @@ void ConfigureGeneral::ResetDefaults() {
 }
 
 void ConfigureGeneral::ApplyConfiguration() {
+    Settings::values.yngvi_x3d_optimize = ui->check_yngvi_x3d->isChecked();
+    UISettings::values.enable_discord_presence = ui->check_discord_presence->isChecked();
     bool powered_on = system.IsPoweredOn();
     for (const auto& func : apply_funcs) {
         func(powered_on);

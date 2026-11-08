@@ -23,8 +23,11 @@
 #include "common/dkb_frame_trace.h"
 #include "common/logging.h"
 #include "common/polyfill_thread.h"
+#include "common/nx2_timeline.h"
 #include "common/settings.h"
 #include "video_core/gpu_split.h"
+#include "video_core/gpu_wait_site.h"
+#include "video_core/renderer_vulkan/fragment_barrier_state.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -119,11 +122,11 @@ public:
         std::source_location location = std::source_location::current());
 
     void DeferFragmentBarrier() {
-        fragment_barrier_pending = state.renderpass != VK_NULL_HANDLE;
+        fragment_barrier.Defer(state.renderpass != VK_NULL_HANDLE);
     }
 
-    bool TakeFragmentBarrier() {
-        return std::exchange(fragment_barrier_pending, false);
+    bool HasFragmentBarrier() const {
+        return fragment_barrier.Pending();
     }
 
     void NoteRenderPassStores() {
@@ -134,6 +137,11 @@ public:
         return render_pass_has_stores;
     }
 
+    /// A dispatch was recorded: the next render pass must see what it wrote.
+    void NoteComputeWrites() {
+        compute_writes_pending = true;
+    }
+
     /// Returns true when a render pass is currently active in the scheduler state.
     bool IsRenderPassActive() const {
         return state.renderpass != VK_NULL_HANDLE;
@@ -141,6 +149,15 @@ public:
 
     /// Update the pipeline to the current execution context.
     bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
+
+    /// Worker thread only: whether the bound graphics pipeline failed to build, so the draws
+    /// recorded after it must be dropped instead of reaching the driver without a pipeline.
+    void SetGraphicsPipelineMissing(bool missing) {
+        graphics_pipeline_missing = missing;
+    }
+    [[nodiscard]] bool GraphicsPipelineMissing() const {
+        return graphics_pipeline_missing;
+    }
 
     /// Update the rescaling state. Returns true if the state has to be updated.
     bool UpdateRescaling(bool is_rescaling, bool mesh_layout);
@@ -201,6 +218,12 @@ public:
         return master_semaphore->CurrentTick();
     }
 
+    /// Changes whenever recorded command buffer state may have been reset (InvalidateState, the
+    /// end of a render pass), so a binding recorded at the same epoch is still bound.
+    [[nodiscard]] u64 RecordingEpoch() const noexcept {
+        return recording_epoch;
+    }
+
     /// Returns true when a tick has been triggered by the GPU.
     [[nodiscard]] bool IsFree(u64 tick) const noexcept {
         return master_semaphore->IsFree(tick);
@@ -219,6 +242,8 @@ public:
             if (tick >= master_semaphore->CurrentTick()) {
                 Flush();
             }
+            VideoCommon::BackWaitScope wait_scope{"Scheduler::Wait (host GPU execution)"};
+            Common::Nx2Timeline::Span timeline_span{"wait for host GPU"};
             master_semaphore->Wait(tick);
         }
         const auto trace_waited = trace ? std::chrono::steady_clock::now()
@@ -425,8 +450,10 @@ private:
     StateTracker& state_tracker;
 
     std::unique_ptr<MasterSemaphore> master_semaphore;
-    bool fragment_barrier_pending{};
+    FragmentBarrierState fragment_barrier;
     bool render_pass_has_stores{};
+    bool compute_writes_pending{};
+    bool graphics_pipeline_missing{};
     std::unique_ptr<CommandPool> command_pool;
 
     vk::QueryPool trace_query_pool;
@@ -479,6 +506,7 @@ private:
     std::function<void()> on_submit;
 
     State state;
+    u64 recording_epoch = 0;
 
     u32 num_renderpass_images = 0;
     std::array<VkImage, 9> renderpass_images{};

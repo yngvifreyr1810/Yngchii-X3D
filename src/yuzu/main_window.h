@@ -40,7 +40,7 @@
 #ifdef ENABLE_UPDATE_CHECKER
 #include <QFuture>
 #include <QFutureWatcher>
-#include "common/net/net.h"
+#include "frontend_common/update_checker.h"
 #endif
 
 class QtConfig;
@@ -374,6 +374,11 @@ private slots:
     void OnMenuInstallToNAND();
     void OnMenuRecentFile();
     void OnConfigure();
+    /// Asks whether Ocarina of Time runs at 60 or 30 FPS (Settings::values.oot_30fps).
+    void AskOotFrameRate();
+    /// Applies the Frizti tuned settings once per revision and undoes other builds' changes to
+    /// them (common/frizti_settings.h).
+    void MigrateFriztiSettings();
     void OnConfigureTas();
     void OnDecreaseVolume();
     void OnIncreaseVolume();
@@ -383,6 +388,7 @@ private slots:
     void OnTasReset();
     void OnToggleGraphicsAPI();
     void OnToggleDockedMode();
+    void OnToggleOotFrameRate();
     void OnToggleGpuAccuracy();
     void OnToggleAdaptingFilter();
     void OnConfigurePerGame();
@@ -444,6 +450,7 @@ private slots:
 
 #ifdef ENABLE_UPDATE_CHECKER
     void OnEmulatorUpdateAvailable();
+    void OnCheckForUpdates();
 #endif
 
 private:
@@ -455,6 +462,7 @@ private:
                            std::string_view gpu_vendor = {});
     void OnApplicationChanged(u64 program_id);
     void UpdateDockedButton();
+    void UpdateOotFpsButton();
     void UpdateAPIText();
     void UpdateFilterText();
     void UpdateAAText();
@@ -500,8 +508,18 @@ private:
     std::shared_ptr<InputCommon::InputSubsystem> input_subsystem;
 
 #ifdef ENABLE_UPDATE_CHECKER
-    QFuture<std::optional<Common::Net::Release>> update_future;
-    QFutureWatcher<std::optional<Common::Net::Release>> update_watcher;
+    void StartUpdateCheck(bool manual);
+    void OfferPendingUpdate();
+    void ShowUpdate(const UpdateChecker::CheckResult& result);
+    void ShowRestartNote();
+
+    QFuture<UpdateChecker::CheckResult> update_future;
+    QFutureWatcher<UpdateChecker::CheckResult> update_watcher;
+    bool update_check_manual = false;
+    // An update waiting for the game to stop or for other dialogs to close.
+    std::optional<UpdateChecker::CheckResult> pending_update;
+    // What the process this one replaced reported, such as "Fritchii v5 is installed".
+    QString restart_note;
 #endif
 
     MultiplayerState* multiplayer_state = nullptr;
@@ -536,6 +554,7 @@ private:
     QPushButton* renderer_status_button = nullptr;
     QPushButton* refresh_button = nullptr;
     QPushButton* dock_status_button = nullptr;
+    QPushButton* oot_fps_button = nullptr;
     QPushButton* filter_status_button = nullptr;
     QPushButton* aa_status_button = nullptr;
     QPushButton* post_shader_status_button = nullptr;
@@ -549,6 +568,7 @@ private:
 
     UserDataMigrator user_data_migrator;
     std::unique_ptr<QtConfig> config;
+    bool launched_with_game = false; ///< Started with a game path (skips the first-launch question)
 
     // Whether emulation is currently running in yuzu.
     bool emulation_running = false;

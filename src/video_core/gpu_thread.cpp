@@ -14,6 +14,7 @@
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/frontend/graphics_context.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/control/scheduler.h"
 #include "video_core/dma_pusher.h"
 #include "video_core/gpu.h"
@@ -52,6 +53,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuCommand};
         Common::SetCurrentThreadName("GPU");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+        Common::PinCurrentThread(Common::PinnedRole::GpuFront);
         Common::SetCurrentThreadToPerformanceCores();
         system.RegisterHostThread();
 
@@ -60,6 +62,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         // When a pending channel last moved or a command arrived (see the polling below).
         auto last_progress = std::chrono::steady_clock::now();
         namespace Profile = VideoCommon::Nx2Profile;
+        // Before the split's back thread starts, which reads it too.
+        Profile::Initialize();
         auto& split = VideoCommon::GpuSplit::Get();
         while (!stop_token.stop_requested()) {
             Profile::Report();
@@ -74,10 +78,16 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     // The CPU usually releases the semaphore soon after: poll for half a
                     // millisecond before sleeping, or every wait also waits out a host sleep
                     // (title 1 waits ~25 times a second).
+                    // EDEN_NX2_EXP6 (zortos293/Lichii#446): 1 = 50 us sleeps (Ocarina waits here
+                    // ~330 times a second and its present waits for the work behind them; on
+                    // Windows a sleep still lasts one timer tick, ~0.5 ms), 2 = always yield.
                     Profile::Scope scope{Profile::Zone::PendingSleep};
-                    if (std::chrono::steady_clock::now() - last_progress <
-                        std::chrono::microseconds{500}) {
+                    const int poll = VideoCore::Nx2Debug::Experiment(6);
+                    if (poll == 2 || std::chrono::steady_clock::now() - last_progress <
+                                         std::chrono::microseconds{500}) {
                         std::this_thread::yield();
+                    } else if (poll == 1) {
+                        std::this_thread::sleep_for(std::chrono::microseconds{50});
                     } else {
                         std::this_thread::sleep_for(std::chrono::milliseconds{1});
                     }
@@ -107,6 +117,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                         split.Drain(VideoCommon::DrainSite::Map);
                     } else {
                         split.DeferFunction(std::move(run->func));
+                        split.NoteMemoryWrite();
                     }
                 } else if (const auto* flush = std::get_if<FlushRegionCommand>(&next.data)) {
                     split.Defer([rasterizer_ptr, addr = flush->addr, size = flush->size] {
@@ -119,9 +130,11 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 } else {
                     ASSERT(false);
                 }
-                split.Defer([state_ptr = &state, fence = next.fence, block = next.block] {
-                    SignalCommand(*state_ptr, fence, block);
-                });
+                split.Defer(
+                    [state_ptr = &state, fence = next.fence, block = next.block] {
+                        SignalCommand(*state_ptr, fence, block);
+                    },
+                    VideoCommon::GpuSplit::Effect::None);
                 split.Publish();
                 continue;
             }
@@ -172,7 +185,7 @@ void ThreadManager::InvalidateRegion(DAddr addr, u64 size) {
 }
 
 void ThreadManager::FlushAndInvalidateRegion(DAddr addr, u64 size, bool is_async) {
-    if (Settings::IsGPULevelHigh()) {
+    if (VideoCore::Nx2Debug::AccuratePart(8)) {
         if (!is_async) {
             PushCommand(FlushRegionCommand(addr, size), false, is_async);
         } else {

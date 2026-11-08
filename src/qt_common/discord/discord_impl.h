@@ -1,14 +1,18 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Yngchii-X3D Project
 // SPDX-License-Identifier: GPL-3.0-or-later
-
-// SPDX-FileCopyrightText: 2018 Citra Emulator Project
-// SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
 #include "discord.h"
-
+#include <cstdint>
 #include <string>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace Core {
 class System;
@@ -18,18 +22,24 @@ namespace DiscordRPC {
 
 class DiscordImpl : public DiscordInterface {
 public:
-    DiscordImpl(Core::System& system_);
+    explicit DiscordImpl(Core::System& system_);
     ~DiscordImpl() override;
 
     void Pause() override;
     void Update() override;
 
 private:
-    std::string GetGameString(const std::string& title);
-    void UpdateGameStatus(std::string_view game_url, bool use_default);
+    bool ConnectPipe();
+    void DisconnectPipe();
+    void SendPacket(uint32_t op, const std::string& json_str);
 
-    std::string game_title{};
     Core::System& system;
+    std::string game_title{};
+    int64_t start_time{0};
+
+#ifdef _WIN32
+    HANDLE pipe_handle{reinterpret_cast<HANDLE>(-1)};
+#endif
 };
 
 } // namespace DiscordRPC

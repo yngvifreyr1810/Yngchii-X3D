@@ -131,6 +131,8 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #endif
 
 // Common //
+#include "common/frizti_settings.h"
+#include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/logging.h"
 #include "common/memory_detect.h"
@@ -293,10 +295,7 @@ static void RemoveTitlebarFilter() {
 using namespace Common::Literals;
 
 #include "qt_common/discord/discord.h"
-
-#ifdef USE_DISCORD_PRESENCE
 #include "qt_common/discord/discord_impl.h"
-#endif
 
 #ifdef QT_STATICPLUGIN
 #include <QtPlugin>
@@ -374,6 +373,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
+    MigrateFriztiSettings();
 
     Common::Log::Filter filter;
     filter.ParseFilterString(Settings::values.log_filter.GetValue());
@@ -408,9 +408,19 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     LoadTranslation();
     FrontendCommon::GenerateSettings();
 
+#ifdef _WIN32
+    if (Settings::values.yngvi_x3d_optimize.GetValue()) {
+        _putenv_s("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
+        _putenv_s("NV_ALLOW_ANSEL", "0");
+        _putenv_s("ANSEL_SDK_DISABLE", "1");
+        LOG_INFO(Frontend, "[Yngvi's X3D Optimize] Selective Overlay Filter active: NVIDIA Overlay/Ansel disabled; MSI Afterburner (VK_LAYER_RTSS) preserved.");
+    }
+#endif
+
     setAcceptDrops(true);
     ui->setupUi(this);
     statusBar()->hide();
+    setWindowIcon(QIcon(QStringLiteral(":/img/lichii.ico")));
 
     startup_icon_theme = QIcon::themeName();
     // fallback can only be set once, colorful theme icons are okay on both light/dark
@@ -444,12 +454,17 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     show();
 
 #ifdef ENABLE_UPDATE_CHECKER
-    if (UISettings::values.check_for_updates) {
-        update_future = QtConcurrent::run(
-            []() -> std::optional<Common::Net::Release> { return UpdateChecker::GetUpdate(); });
-        update_watcher.connect(&update_watcher, &QFutureWatcher<QString>::finished, this,
-                               &MainWindow::OnEmulatorUpdateAvailable);
-        update_watcher.setFuture(update_future);
+    connect(&update_watcher, &QFutureWatcher<UpdateChecker::CheckResult>::finished, this,
+            &MainWindow::OnEmulatorUpdateAvailable);
+    // A swap that a crash interrupted is finished or undone before anything else.
+    if (!Updater::FinishPendingSwap(this)) {
+        if (auto note = Updater::TakeRestartNote()) {
+            restart_note = std::move(*note);
+            QTimer::singleShot(0, this, &MainWindow::ShowRestartNote);
+        }
+        if (UISettings::values.check_for_updates) {
+            StartUpdateCheck(false);
+        }
     }
 #endif
 
@@ -544,6 +559,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         }
 
         if (!lp.filepath.empty()) {
+            launched_with_game = true;
             BootGame(QString::fromStdString(lp.filepath), ApplicationAppletParameters());
         } else if (lp.launch_setup) {
             LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::Starter), std::nullopt);
@@ -558,6 +574,139 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 LibraryAppletParameters(0x010000000000100Dull, Service::AM::AppletId::QLaunch));
         }
     }
+
+    // The first launch asks for Ocarina of Time's frame rate (not when started with a game,
+    // e.g. from a shortcut or script: that keeps the 60 FPS default until the next plain launch).
+    if (!launched_with_game && !Settings::values.oot_fps_asked.GetValue()) {
+        QTimer::singleShot(0, this, &MainWindow::AskOotFrameRate);
+    }
+}
+
+namespace {
+std::string OcarinaConfigName() {
+    return fmt::format("{:016X}", Settings::Frizti::OcarinaOfTimeProgramId);
+}
+
+std::filesystem::path FriztiRecordPath() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "frizti.ini";
+}
+
+Settings::Frizti::Record LoadFriztiRecord() {
+    return Settings::Frizti::ParseRecord(
+        Common::FS::ReadStringFromFile(FriztiRecordPath(), Common::FS::FileType::TextFile));
+}
+
+void SaveFriztiRecord(const Settings::Frizti::Record& record) {
+    const std::string text = Settings::Frizti::SerializeRecord(record);
+    if (Common::FS::WriteStringToFile(FriztiRecordPath(), Common::FS::FileType::TextFile, text) !=
+        text.size()) {
+        LOG_WARNING(Frontend, "Could not write {}",
+                    Common::FS::PathToUTF8String(FriztiRecordPath()));
+    }
+}
+
+// After each config write: what this build wrote for the tuned settings, so a later difference
+// shows that another build (or a hand edit) changed them.
+void RecordFriztiWrite(const Config& written) {
+    namespace Frizti = Settings::Frizti;
+    const auto tuned = Frizti::TunedSettings(Settings::values);
+    auto record = LoadFriztiRecord();
+    if (written.GetType() == Config::ConfigType::GlobalConfig) {
+        auto values = Frizti::GlobalValues(tuned);
+        if (values == record.global) {
+            return;
+        }
+        record.global = std::move(values);
+    } else if (written.GetType() == Config::ConfigType::PerGameConfig &&
+               std::string_view{written.GetConfigFilePath()}.ends_with(OcarinaConfigName() +
+                                                                       ".ini")) {
+        auto values = Frizti::PerGameValues(tuned);
+        if (values == record.per_game) {
+            return;
+        }
+        record.per_game = std::move(values);
+    } else {
+        return;
+    }
+    SaveFriztiRecord(record);
+}
+} // namespace
+
+// Frizti builds change the defaults Ocarina of Time needs, but a default only reaches a config
+// that never saved its own value, and the other Eden/Lichii builds sharing the config save (seed)
+// theirs. Once per revision, set the tuned values and drop Ocarina's per-game overrides of them.
+// Between revisions the player's changes in Frizti are kept, and those another build made are
+// undone: config/frizti.ini, which only Frizti writes, holds what Frizti last wrote.
+void MainWindow::MigrateFriztiSettings() {
+    namespace Frizti = Settings::Frizti;
+    const auto tuned = Frizti::TunedSettings(Settings::values);
+    auto record = LoadFriztiRecord();
+    // Other builds keep qt-config.ini's revision key but never write frizti.ini; either one
+    // missing or older applies the whole set again.
+    const u32 applied =
+        (std::min)(Settings::values.frizti_settings_revision.GetValue(), record.revision);
+    const bool full = applied < Frizti::Revision;
+
+    auto changes = Frizti::ReconcileGlobal(tuned, record, full);
+    for (auto& change : Frizti::FixDockedController(Settings::values)) {
+        changes.push_back(std::move(change));
+    }
+
+    // Ocarina's per-game config, loaded as a game boot does.
+    std::map<std::string, std::string> per_game;
+    if (Common::FS::Exists(Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "custom" /
+                           (OcarinaConfigName() + ".ini"))) {
+        QtConfig game_config(OcarinaConfigName(), Config::ConfigType::PerGameConfig);
+        auto game_changes = Frizti::ReconcilePerGame(tuned, record, full);
+        if (!game_changes.empty()) {
+            game_config.SaveAllValues();
+        }
+        per_game = Frizti::PerGameValues(tuned);
+        Settings::RestoreGlobalState(false);
+        Settings::values.players.SetGlobal(true);
+        for (auto& change : game_changes) {
+            changes.push_back(std::move(change));
+        }
+    }
+
+    // A newer Frizti build's revision is kept.
+    const u32 revision = (std::max)(applied, Frizti::Revision);
+    if (!changes.empty() || Settings::values.frizti_settings_revision.GetValue() != revision) {
+        Settings::values.frizti_settings_revision.SetValue(revision);
+        config->SaveAllValues();
+    }
+    record.revision = revision;
+    record.global = Frizti::GlobalValues(tuned);
+    record.per_game = std::move(per_game);
+    SaveFriztiRecord(record);
+    Config::on_written = RecordFriztiWrite;
+
+    if (full) {
+        LOG_INFO(Frontend, "Frizti settings revision {} -> {}: {}", applied, revision,
+                 changes.empty() ? std::string{"already set"} : Frizti::FormatChanges(changes));
+    } else if (!changes.empty()) {
+        LOG_INFO(Frontend, "Frizti settings changed by another build, restored: {}",
+                 Frizti::FormatChanges(changes));
+    }
+}
+
+void MainWindow::AskOotFrameRate() {
+    QMessageBox box(this);
+    box.setWindowTitle(tr("Ocarina of Time frame rate"));
+    box.setIcon(QMessageBox::Question);
+    box.setText(tr("Which frame rate should Ocarina of Time run at?"));
+    box.setInformativeText(
+        tr("60 FPS needs a fast, recent CPU.\n"
+           "30 FPS is for lower-end PCs. The game keeps its normal speed either way.\n\n"
+           "Switch any time with the 60 FPS / 30 FPS button at the bottom of the window."));
+    QPushButton* const fps60 = box.addButton(tr("60 FPS"), QMessageBox::AcceptRole);
+    QPushButton* const fps30 = box.addButton(tr("30 FPS (lower-end PCs)"), QMessageBox::AcceptRole);
+    box.setDefaultButton(fps60);
+    box.exec();
+    Settings::values.oot_30fps.SetValue(box.clickedButton() == fps30);
+    Settings::values.oot_fps_asked.SetValue(true);
+    UpdateOotFpsButton();
+    config->SaveAllValues();
 }
 
 MainWindow::~MainWindow() {
@@ -1197,6 +1346,17 @@ void MainWindow::InitializeWidgets() {
             });
     statusBar()->insertPermanentWidget(0, gpu_accuracy_button);
 
+    // Ocarina of Time frame rate: one click switches 60 / 30 FPS, at once (also in game).
+    oot_fps_button = new QPushButton();
+    oot_fps_button->setObjectName(QStringLiteral("OotFpsStatusBarButton"));
+    oot_fps_button->setCheckable(true);
+    oot_fps_button->setFocusPolicy(Qt::NoFocus);
+    oot_fps_button->setToolTip(tr("Ocarina of Time frame rate. Click to switch between 60 FPS and "
+                                  "30 FPS (lower-end PCs); it takes effect at once."));
+    connect(oot_fps_button, &QPushButton::clicked, this, &MainWindow::OnToggleOotFrameRate);
+    UpdateOotFpsButton();
+    statusBar()->insertPermanentWidget(0, oot_fps_button);
+
     // Setup Renderer API button
     renderer_status_button = new QPushButton();
     renderer_status_button->setObjectName(QStringLiteral("RendererStatusBarButton"));
@@ -1645,6 +1805,25 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
+
+#ifdef ENABLE_UPDATE_CHECKER
+    auto* check_action = new QAction(tr("Check for Updates..."), this);
+    ui->menu_Help->insertAction(ui->action_About, check_action);
+    connect(check_action, &QAction::triggered, this, &MainWindow::OnCheckForUpdates);
+
+    auto* rollback_action = new QAction(tr("Roll Back to the Previous Version..."), this);
+    rollback_action->setVisible(false);
+    ui->menu_Help->insertAction(ui->action_About, rollback_action);
+    connect(ui->menu_Help, &QMenu::aboutToShow, this, [this, rollback_action] {
+        rollback_action->setVisible(Updater::RollbackVersion().has_value());
+        rollback_action->setEnabled(!emulation_running && !boot_in_progress);
+    });
+    connect(rollback_action, &QAction::triggered, this, [this] {
+        if (!emulation_running && !boot_in_progress) {
+            Updater::RollBack(this);
+        }
+    });
+#endif
 }
 
 void MainWindow::UpdateMenuState() {
@@ -2335,6 +2514,11 @@ void MainWindow::OnEmulationStopped() {
     QtCommon::system->HIDCore().ReloadInputDevices();
     UpdateStatusButtons();
     LOG_INFO(Frontend, "Emulation cleanup completed");
+#ifdef ENABLE_UPDATE_CHECKER
+    if (pending_update && !close_pending) {
+        QTimer::singleShot(0, this, &MainWindow::OfferPendingUpdate);
+    }
+#endif
     if (close_pending) {
         QTimer::singleShot(0, this, &QWidget::close);
     } else if (!boot_in_progress) {
@@ -3228,7 +3412,8 @@ void MainWindow::OnLoadComplete() {
     loading_screen->OnLoadComplete();
 
     perf_overlay = new PerformanceOverlay(this);
-    perf_overlay->setVisible(ui->action_Show_Performance_Overlay->isChecked());
+    ui->action_Show_Performance_Overlay->setChecked(true);
+    perf_overlay->setVisible(true);
 
     connect(perf_overlay, &PerformanceOverlay::closed, perf_overlay,
             [this]() { ui->action_Show_Performance_Overlay->setChecked(false); });
@@ -4535,13 +4720,112 @@ void MainWindow::OnCaptureScreenshot() {
 }
 
 #ifdef ENABLE_UPDATE_CHECKER
-void MainWindow::OnEmulatorUpdateAvailable() {
-    std::optional<Common::Net::Release> version = update_future.result();
-    if (!version)
+void MainWindow::StartUpdateCheck(bool manual) {
+    if (update_watcher.isRunning()) {
+        update_check_manual |= manual;
         return;
+    }
+    update_check_manual = manual;
+    update_future = QtConcurrent::run([]() { return UpdateChecker::Check(); });
+    update_watcher.setFuture(update_future);
+}
 
-    UpdateDialog dialog(version.value(), this);
-    dialog.exec();
+void MainWindow::OnCheckForUpdates() {
+    StartUpdateCheck(true);
+}
+
+void MainWindow::OnEmulatorUpdateAvailable() {
+    const auto result = update_future.result();
+    const bool manual = std::exchange(update_check_manual, false);
+    if (result.failure != UpdateChecker::Failure::None) {
+        QString text;
+        switch (result.failure) {
+        case UpdateChecker::Failure::RateLimited:
+            text = tr("Could not check for updates: GitHub rate limit reached. Fritchii will try "
+                      "again at the next start.");
+            break;
+        case UpdateChecker::Failure::Http:
+            text =
+                tr("Could not check for updates: GitHub answered with HTTP %1.").arg(result.status);
+            break;
+        default:
+            text = tr("Could not check for updates. Check your internet connection.");
+            break;
+        }
+        // The check at startup stays quiet when offline.
+        if (manual) {
+            QMessageBox::warning(this, tr("Check for Updates"), text);
+        } else if (result.failure != UpdateChecker::Failure::Network) {
+            statusBar()->showMessage(text, 15000);
+        }
+        return;
+    }
+    if (!result.update) {
+        if (manual) {
+            QMessageBox::information(this, tr("Check for Updates"),
+                                     tr("You have the latest version (%1 %2).")
+                                         .arg(QString::fromLatin1(Common::g_build_name),
+                                              QString::fromLatin1(Common::g_build_version)));
+        }
+        return;
+    }
+
+    const auto& release = *result.update;
+    const auto now = static_cast<unsigned long long>(QDateTime::currentSecsSinceEpoch());
+    if (!manual && (UISettings::values.skipped_update_tag.GetValue() == release.tag ||
+                    UISettings::values.update_remind_at.GetValue() > now)) {
+        return;
+    }
+    pending_update = result;
+    if (emulation_running || boot_in_progress) {
+        statusBar()->showMessage(tr("%1 is available. It will be offered when the game closes.")
+                                     .arg(QString::fromStdString(release.title)),
+                                 15000);
+        return;
+    }
+    OfferPendingUpdate();
+}
+
+void MainWindow::OfferPendingUpdate() {
+    if (!pending_update || close_pending || emulation_running || boot_in_progress) {
+        // OnEmulationStopped offers it once the game is closed.
+        return;
+    }
+    // Wait for other dialogs, such as the first-launch frame rate question, to be answered.
+    const bool first_question_pending =
+        !launched_with_game && !Settings::values.oot_fps_asked.GetValue();
+    if (QApplication::activeModalWidget() != nullptr || first_question_pending) {
+        QTimer::singleShot(1000, this, &MainWindow::OfferPendingUpdate);
+        return;
+    }
+    const auto result = std::move(*pending_update);
+    pending_update.reset();
+    ShowUpdate(result);
+}
+
+void MainWindow::ShowRestartNote() {
+    if (QApplication::activeModalWidget() != nullptr) {
+        QTimer::singleShot(1000, this, &MainWindow::ShowRestartNote);
+        return;
+    }
+    QMessageBox::information(this, tr("Fritchii"), restart_note);
+}
+
+void MainWindow::ShowUpdate(const UpdateChecker::CheckResult& result) {
+    const auto& release = *result.update;
+    const auto now = static_cast<unsigned long long>(QDateTime::currentSecsSinceEpoch());
+    UpdateDialog dialog(release, result.asset, this);
+    switch (dialog.exec()) {
+    case UpdateDialog::SkipVersion:
+        UISettings::values.skipped_update_tag = release.tag;
+        break;
+    case QDialog::Rejected:
+        UISettings::values.update_remind_at = now + 24 * 60 * 60;
+        break;
+    default:
+        return;
+    }
+    OnSaveConfig();
 }
 #endif
 
@@ -4718,6 +5002,19 @@ void MainWindow::UpdateGPUAccuracyButton() {
     gpu_accuracy_button->setChecked(gpu_accuracy != Settings::GpuAccuracy::Low);
 }
 
+void MainWindow::UpdateOotFpsButton() {
+    const bool fps30 = Settings::values.oot_30fps.GetValue();
+    oot_fps_button->setChecked(fps30);
+    oot_fps_button->setText(fps30 ? tr("30 FPS") : tr("60 FPS"));
+}
+
+void MainWindow::OnToggleOotFrameRate() {
+    Settings::values.oot_30fps.SetValue(!Settings::values.oot_30fps.GetValue());
+    Settings::values.oot_fps_asked.SetValue(true);
+    UpdateOotFpsButton();
+    config->SaveAllValues();
+}
+
 void MainWindow::UpdateDockedButton() {
     const auto console_mode = Settings::values.use_docked_mode.GetValue();
     dock_status_button->setChecked(Settings::IsDockedMode());
@@ -4784,6 +5081,7 @@ void MainWindow::UpdateStatusButtons() {
     UpdateAPIText();
     UpdateGPUAccuracyButton();
     UpdateDockedButton();
+    UpdateOotFpsButton();
     UpdateFilterText();
     UpdateAAText();
     UpdateVolumeUI();
@@ -5252,15 +5550,12 @@ void MainWindow::OnLanguageChanged(const QString& locale) {
     UpdateWindowTitle();
 }
 
-void MainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
-#ifdef USE_DISCORD_PRESENCE
-    if (state)
+void MainWindow::SetDiscordEnabled(bool state) {
+    if (state) {
         discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>(*QtCommon::system);
-    else
+    } else {
         discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
-#else
-    discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
-#endif
+    }
     discord_rpc->Update();
 }
 

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <vector>
 
 #include "common/common_types.h"
@@ -33,10 +34,33 @@ constexpr u32 RESCALING_LAYOUT_WORDS_OFFSET = offsetof(RescalingLayout, rescalin
 constexpr u32 RESCALING_LAYOUT_DOWN_FACTOR_OFFSET = offsetof(RescalingLayout, down_factor);
 constexpr u32 RENDERAREA_LAYOUT_OFFSET = offsetof(RenderAreaLayout, render_area);
 
+// EDEN_NX2_MESH_FIRST=1: the draw's first vertex is the first task (or mesh, without a task)
+// workgroup index, as in NVN and GL_NV_mesh_shader. Only the first active stage reads non-zero.
+struct MeshDrawBaseLayout {
+    u32 task;
+    u32 mesh;
+};
+constexpr u32 MESH_DRAW_BASE_OFFSET = sizeof(RescalingLayout);
+static_assert(MESH_DRAW_BASE_OFFSET + sizeof(MeshDrawBaseLayout) <=
+              sizeof(RescalingLayout) + sizeof(RenderAreaLayout));
+
+inline bool MeshFirstEnabled() {
+    static const bool enabled{std::getenv("EDEN_NX2_MESH_FIRST") != nullptr};
+    return enabled;
+}
+
 [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings);
 [[nodiscard]] inline std::vector<u32> EmitSPIRV(const Profile& profile, IR::Program& program) {
     Bindings binding;
     return EmitSPIRV(profile, {}, program, binding);
 }
+
+/// Words per lane in the buffer of EmitCooperativeHmmaTest: the guest registers a0 a1 a2 a3 b0 b1
+/// c0 c1 as input, then d0 d1 as output.
+constexpr u32 COOPERATIVE_HMMA_TEST_LANE_WORDS = 10;
+
+/// A compute shader of one warp running the HMMA.16816.F16 lowering on the registers in its storage
+/// buffer (set 0, binding 0), to check at startup that the driver's matrix layout is the expected.
+[[nodiscard]] std::vector<u32> EmitCooperativeHmmaTest(u32 spirv_version);
 
 } // namespace Shader::Backend::SPIRV

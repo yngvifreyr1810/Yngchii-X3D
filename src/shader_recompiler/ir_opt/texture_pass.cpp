@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <string>
+#include <cstdlib>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,6 +18,7 @@
 #include <limits>
 #include <boost/container/small_vector.hpp>
 
+#include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "shader_recompiler/byte_addressed_image.h"
@@ -946,6 +949,39 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
                     throw NotImplementedException("Failed to track bindless texture constant buffer (stopped at {}, budget {})",
                                                   g_handle_failure, budget);
                 }
+                // EDEN_NX2_HANDLE_FALLBACK_TRACE: what the per-draw handle program stopped at.
+                static const bool trace_fallback = std::getenv("EDEN_NX2_HANDLE_FALLBACK_TRACE") != nullptr;
+                if (trace_fallback) {
+                    std::string chain;
+                    std::vector<const IR::Inst*> queue;
+                    std::unordered_set<const IR::Inst*> seen;
+                    if (!inst.Arg(0).IsImmediate()) queue.push_back(inst.Arg(0).InstRecursive());
+                    for (size_t i = 0; i < queue.size() && i < 48; ++i) {
+                        const IR::Inst* const node = queue[i];
+                        chain += fmt::format(" [{:p}]{}(", static_cast<const void*>(node), node->GetOpcode());
+                        for (size_t arg = 0; arg < node->NumArgs(); ++arg) {
+                            const IR::Value value = node->Arg(arg);
+                            if (value.IsImmediate()) {
+                                const IR::Type type = value.Type();
+                                if (type == IR::Type::U32 || type == IR::Type::F32) {
+                                    chain += fmt::format("{}{:#x}", arg ? "," : "", value.U32());
+                                } else if (type == IR::Type::U1) {
+                                    chain += fmt::format("{}{}", arg ? "," : "", value.U1());
+                                } else {
+                                    chain += fmt::format("{}{}", arg ? "," : "", IR::NameOf(type));
+                                }
+                            } else {
+                                const IR::Inst* const def = value.InstRecursive();
+                                chain += fmt::format("{}{:p}", arg ? "," : "", static_cast<const void*>(def));
+                                if (seen.insert(def).second) queue.push_back(def);
+                            }
+                        }
+                        chain += ")";
+                    }
+                    LOG_WARNING(Shader, "Bindless handle fallback: program stopped at {} (budget {}); using c{}[{:#x}] shift {} secondary {} c{}[{:#x}]; chain:{}",
+                                g_handle_failure, budget, legacy->index, legacy->offset, legacy->shift_left, legacy->has_secondary,
+                                legacy->secondary_index, legacy->secondary_offset, chain);
+                }
                 return TextureInst{.cbuf = *legacy, .inst = &inst, .block = block};
             }
             auto& programs{*g_handle_programs};
@@ -1366,7 +1402,9 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                 });
             } else {
                 count = std::min(count, sampled_dynamic_cap);
-                const bool is_integer{is_texture_pixel_format_integer(cbuf)};
+                // Depth-compare sampling returns a float in Vulkan, so its image must be float
+                // even when a garbage or unknown descriptor reads as an integer format.
+                const bool is_integer{flags.is_depth == 0 && is_texture_pixel_format_integer(cbuf)};
                 index = descriptors.Add(TextureDescriptor{
                     .type = flags.type,
                     .is_depth = flags.is_depth != 0,

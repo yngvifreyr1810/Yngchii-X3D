@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <functional>
@@ -47,7 +49,29 @@ public:
                                                 std::memory_order_relaxed));
     }
 
+    /// Calls `callback` for each write collected and not yet applied, without consuming them: those
+    /// still collecting and those a Gather is handing out.
+    void ForEachPending(const std::function<void(PAddr, size_t)>& callback) {
+        std::vector<TransformAddress> pending;
+        {
+            std::scoped_lock gather_lk(gather_guard);
+            std::scoped_lock lk(guard);
+            pending = back_buffer;
+            pending.insert(pending.end(), front_buffer.begin(), front_buffer.end());
+            const TransformAddress t = current.load(std::memory_order_acquire);
+            if (IsValid(t.address)) {
+                pending.push_back(t);
+            }
+        }
+        for (const auto& transform : pending) {
+            ForEachRun(transform, callback);
+        }
+    }
+
     void Gather(std::function<void(PAddr, size_t)>& callback) {
+        // FlushRegion also gathers off the GPU thread (host1x video decode reads); serialize
+        // gatherers so one cannot swap or clear front_buffer while another iterates it.
+        std::scoped_lock gather_lk(gather_guard);
         {
             std::scoped_lock lk(guard);
             TransformAddress t = current.exchange(default_transform, std::memory_order_relaxed);
@@ -57,21 +81,36 @@ public:
             }
         }
         for (auto& transform : front_buffer) {
-            size_t offset = 0;
-            u64 mask = transform.mask;
-            while (mask != 0) {
-                const size_t empty_bits = std::countr_zero(mask);
-                offset += empty_bits << align_bits;
-                mask = mask >> empty_bits;
-
-                const size_t continuous_bits = std::countr_one(mask);
-                callback((static_cast<PAddr>(transform.address) << page_bits) + offset,
-                         continuous_bits << align_bits);
-                mask = continuous_bits < align_size ? (mask >> continuous_bits) : 0;
-                offset += continuous_bits << align_bits;
-            }
+            ForEachRun(transform, callback);
         }
         front_buffer.clear();
+    }
+
+    /// Returns true when collected writes not yet gathered overlap [address, address + size).
+    bool Overlaps(PAddr address, size_t size) {
+        const PAddr end = address + size;
+        const auto overlaps = [&](TransformAddress t) {
+            if (!IsValid(t.address)) {
+                return false;
+            }
+            const PAddr begin = static_cast<PAddr>(t.address) << page_bits;
+            if (address >= begin + page_size || end <= begin) {
+                return false;
+            }
+            const size_t minor_bit = address > begin ? (address - begin) >> align_bits : 0;
+            const size_t top_bit = ((std::min)(end - begin, PAddr{page_size}) + align_mask) >> align_bits;
+            return (t.mask & CreateMask<u32>(top_bit, minor_bit)) != 0;
+        };
+        std::scoped_lock lk(guard);
+        if (overlaps(current.load(std::memory_order_acquire))) {
+            return true;
+        }
+        for (const TransformAddress& t : back_buffer) {
+            if (overlaps(t)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 private:
@@ -79,6 +118,22 @@ private:
         u32 address;
         u32 mask;
     };
+
+    template <typename Func>
+    static void ForEachRun(const TransformAddress& transform, Func&& callback) {
+        size_t offset = 0;
+        u64 mask = transform.mask;
+        while (mask != 0) {
+            const size_t empty_bits = std::countr_zero(mask);
+            offset += empty_bits << align_bits;
+            mask = mask >> empty_bits;
+            const size_t continuous_bits = std::countr_one(mask);
+            callback((static_cast<PAddr>(transform.address) << page_bits) + offset,
+                     continuous_bits << align_bits);
+            mask = continuous_bits < align_size ? (mask >> continuous_bits) : 0;
+            offset += continuous_bits << align_bits;
+        }
+    }
 
     constexpr static size_t page_bits = DEVICE_PAGEBITS - 1;
     constexpr static size_t page_size = 1ULL << page_bits;
@@ -115,8 +170,59 @@ private:
 
     std::atomic<TransformAddress> current{};
     std::mutex guard;
+    std::mutex gather_guard;
     std::vector<TransformAddress> back_buffer;
     std::vector<TransformAddress> front_buffer;
 };
+
+/// One bit per device page of the 36-bit device address space (2 MiB), set by writers and taken
+/// by the native uniform bank check (BufferCache, EDEN_NX2_EXP9).
+class DevicePageFlags {
+public:
+    static constexpr u64 AddressBits = 36;
+
+    void Mark(u64 address, u64 size) noexcept {
+        constexpr u64 limit = u64{1} << AddressBits;
+        if (size == 0 || address >= limit) {
+            return;
+        }
+        u64 page = address >> DEVICE_PAGEBITS;
+        const u64 last = ((std::min)(address + size, limit) - 1) >> DEVICE_PAGEBITS;
+        while (page <= last) {
+            const u64 first_bit = page % 64;
+            const u64 bits = (std::min<u64>)(64 - first_bit, last - page + 1);
+            const u64 mask = (bits == 64 ? ~u64{0} : (u64{1} << bits) - 1) << first_bit;
+            std::atomic<u64>& word = words[page / 64];
+            if ((word.load(std::memory_order_relaxed) & mask) != mask) {
+                word.fetch_or(mask, std::memory_order_seq_cst);
+            }
+            page += bits;
+        }
+    }
+
+    /// Clears the bit of the page holding `address`, returning whether it was set.
+    bool Take(u64 address) noexcept {
+        if (address >= (u64{1} << AddressBits)) {
+            return false;
+        }
+        const u64 page = address >> DEVICE_PAGEBITS;
+        const u64 bit = u64{1} << (page % 64);
+        std::atomic<u64>& word = words[page / 64];
+        if ((word.load(std::memory_order_relaxed) & bit) == 0) {
+            return false;
+        }
+        return (word.fetch_and(~bit, std::memory_order_seq_cst) & bit) != 0;
+    }
+
+private:
+    std::array<std::atomic<u64>, (u64{1} << (AddressBits - DEVICE_PAGEBITS)) / 64> words{};
+};
+
+/// Pages guest CPU writes went to through the dirty memory managers: the buffer cache sees them
+/// only at the next InvalidateGPUCache.
+inline DevicePageFlags g_collected_write_pages;
+/// Pages whose guest memory the buffer cache saw change (WriteMemory, uploads in place,
+/// downloads).
+inline DevicePageFlags g_buffer_write_pages;
 
 } // namespace Core
