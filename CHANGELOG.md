@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.5.0] - 2026-11-09
+
+### Upstream Fritchii v5.5 Synchronizations
+- 4012e5271e Fritchii v5.5: NVIDIA shader cache size for Fritchii's process, version and in-app notes
+- d64f34764a Fritchii: frame generation never runs (a value left on by an older build made the camera flicker)
+- bfa630ca7b Fritchii: the Prepare Shaders warm-up window says it is the optional quick part, and no longer asks AMD players to turn shader libraries on
+- bd59d18c6a Fritchii: EDS2 and dynamic vertex input in the tuned settings (Revision 5); a GPU thread pinning note
+- 35cb046326 settings: DLSS global only (a per-game value hid the checkbox), and a DLSS preset setting
+- 8ce6c1e0d4 Fritchii v5.4: version and in-app notes (AMD shader preparation)
+- 9ea66c8273 vulkan: precompiled pipelines recorded with a dynamic logic op build where it is static (AMD)
+
+### Yngchii-X3D Optimizations Maintained
+- Dedicated AMD Ryzen 3D V-Cache thread core pinning (GPUFront Core 1, GPUBack Core 2).
+- Hardware-gated AVX-512 dirty page scan with clean AVX2 fallback.
+- In-place auto-updater targeting Yngchii-X3D releases with pre-release safety.
+- Selective NVIDIA Overlay & Game Filter bypass.
+
+---
+
+
 ## [5.3.0] - 2026-11-09
 
 ### Upstream Fritchii v5.3 Synchronizations
