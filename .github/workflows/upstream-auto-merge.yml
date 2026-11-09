@@ -20,6 +20,9 @@ jobs:
   check-and-merge:
     name: Check Upstream Frizti/Fritchii & Auto-Merge
     runs-on: ubuntu-latest
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout Yngchii-X3D Repository
@@ -50,7 +53,7 @@ jobs:
             exit 1
           fi
           
-          # Extract version number (e.g. 5.2 from fritchii-v5.2)
+          # Extract version number (e.g. 5.3 from fritchii-v5.3)
           VERSION_NUM=${LATEST_UPSTREAM_TAG#fritchii-v}
           TARGET_YNGCHII_TAG="yngchii-v${VERSION_NUM}"
           
@@ -58,10 +61,10 @@ jobs:
           echo "version_num=$VERSION_NUM" >> $GITHUB_OUTPUT
           echo "target_yngchii_tag=$TARGET_YNGCHII_TAG" >> $GITHUB_OUTPUT
           
-          # Check if this release tag already exists in Yngchii-X3D
-          if git rev-parse "$TARGET_YNGCHII_TAG" >/dev/null 2>&1 && [ "${{ inputs.force_sync }}" != "true" ]; then
+          # Check if this release already exists on GitHub
+          if gh release view "$TARGET_YNGCHII_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 && [ "${{ inputs.force_sync }}" != "true" ]; then
             echo "already_synced=true" >> $GITHUB_OUTPUT
-            echo "Upstream tag $LATEST_UPSTREAM_TAG is already synced as $TARGET_YNGCHII_TAG."
+            echo "Upstream tag $LATEST_UPSTREAM_TAG is already synced as $TARGET_YNGCHII_TAG on GitHub."
           else
             echo "already_synced=false" >> $GITHUB_OUTPUT
             echo "New upstream release detected: $LATEST_UPSTREAM_TAG -> $TARGET_YNGCHII_TAG"
@@ -92,6 +95,7 @@ jobs:
             
             git push origin "$BRANCH_NAME" --force
             gh pr create \
+              --repo "${{ github.repository }}" \
               --title "Sync Upstream $UPSTREAM_TAG into Yngchii-X3D" \
               --body "Automated merge detected conflicts requiring review. Please resolve conflicts and merge to trigger the pre-release." \
               --base main \
@@ -110,8 +114,6 @@ jobs:
 
       - name: Push Main and Create GitHub Pre-Release
         if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
           TAG_NAME="${{ steps.upstream_info.outputs.target_yngchii_tag }}"
@@ -119,13 +121,25 @@ jobs:
           # Push merged commits to main
           git push origin main
           
-          # Create and push new tag
-          git tag -a "$TAG_NAME" -m "Release Yngchii-X3D v${VERSION_NUM}"
-          git push origin "$TAG_NAME"
+          # Push tag to origin if not already there (idempotent)
+          git tag -a "$TAG_NAME" -m "Release Yngchii-X3D v${VERSION_NUM}" 2>/dev/null || true
+          git push origin "$TAG_NAME" || true
           
           # Create Pre-Release on GitHub (--prerelease prevents in-emulator updater from offering before testing)
           RELEASE_TITLE="Yngchii-X3D v${VERSION_NUM} (Upstream v${VERSION_NUM} Hotfix Sync)"
-          gh release create "$TAG_NAME" \
-            --title "$RELEASE_TITLE" \
-            --notes-file release_notes.md \
-            --prerelease
+          
+          if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists on GitHub, updating notes..."
+            gh release edit "$TAG_NAME" \
+              --repo "${{ github.repository }}" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_notes.md \
+              --prerelease
+          else
+            echo "Creating new pre-release $TAG_NAME on ${{ github.repository }}..."
+            gh release create "$TAG_NAME" \
+              --repo "${{ github.repository }}" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release_notes.md \
+              --prerelease
+          fi
