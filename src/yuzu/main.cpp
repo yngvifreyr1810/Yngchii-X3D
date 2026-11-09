@@ -235,9 +235,8 @@ int main(int argc, char* argv[]) {
     LOG_INFO(Frontend, "[Yngchii-X3D v5] CPU Detected: {}", x3d.status_summary);
     if (x3d.is_supported_x3d) {
         set_env_if_missing("EDEN_NX2_PIN_THREADS", "1");
-        if (x3d.physical_cores >= 8) {
-            set_env_if_missing("EDEN_NX2_GUEST_PIN_EACH", "1");
-        }
+        // Keep guest cores floating across all 6 remaining physical cores (0xffc3)
+        // rather than pinning Guest Core 0 to Core 0 (where DPCs, Nvidia IRQs & Qt run).
     }
 #ifdef ENABLE_UPDATE_CHECKER
     // Before the switches are added to the environment, which a restart must not inherit.

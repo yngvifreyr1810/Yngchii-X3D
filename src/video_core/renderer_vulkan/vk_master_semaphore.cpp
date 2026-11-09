@@ -9,6 +9,7 @@
 #include <ranges>
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
+#include "common/windows_futex.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -85,7 +86,11 @@ void MasterSemaphore::Wait(u64 tick) {
 
         u64 last_tick = gpu_tick.load(std::memory_order_relaxed);
         while (gpu_tick.load(std::memory_order_acquire) < tick) {
+#ifdef _WIN32
+            Common::FutexWait(gpu_tick, last_tick);
+#else
             gpu_tick.wait(last_tick, std::memory_order_acquire);
+#endif
             last_tick = gpu_tick.load(std::memory_order_relaxed);
         }
         return;
@@ -359,7 +364,11 @@ void MasterSemaphore::WaitThread(std::stop_token token) {
             free_queue.push_front(std::move(fence));
             gpu_tick.store(host_tick, std::memory_order_release);
         }
+#ifdef _WIN32
+        Common::FutexWakeAll(gpu_tick);
+#else
         gpu_tick.notify_one();
+#endif
     }
 }
 

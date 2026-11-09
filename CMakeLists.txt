@@ -548,7 +548,7 @@ elseif (WIN32)
     set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} winmm iphlpapi ws2_32 wlanapi)
     if (MINGW)
         # PSAPI is the Process Status API
-        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} psapi imm32 version crypt32 rpcrt4 gdi32 wldap32 mswsock)
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} psapi imm32 version crypt32 rpcrt4 gdi32 wldap32 mswsock synchronization)
     endif()
 elseif (MANAGARM)
     set(PLATFORM_LIBRARIES iconv intl)

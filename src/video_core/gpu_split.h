@@ -20,6 +20,7 @@
 #include <unordered_map>
 
 #include "common/common_types.h"
+#include "common/windows_futex.h"
 #include "video_core/engines/engine_interface.h"
 #include "video_core/split_write_tracker.h"
 
@@ -987,7 +988,11 @@ private:
     void NotifyFront() {
         if (front_waiting.load(std::memory_order_seq_cst)) {
             front_wake.fetch_add(1, std::memory_order_seq_cst);
+#ifdef _WIN32
+            Common::FutexWakeSingle(front_wake);
+#else
             front_wake.notify_one();
+#endif
         }
     }
 

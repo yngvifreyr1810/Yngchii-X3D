@@ -26,6 +26,7 @@
 #include "video_core/engines/engine_interface.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu_split.h"
+#include "common/windows_futex.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_debug_control.h"
@@ -267,7 +268,11 @@ void GpuSplit::Publish() {
     published.store(write_position, std::memory_order_seq_cst);
     if (back_waiting.load(std::memory_order_seq_cst)) {
         wake.fetch_add(1, std::memory_order_seq_cst);
+#ifdef _WIN32
+        Common::FutexWakeSingle(wake);
+#else
         wake.notify_one();
+#endif
     }
     if ((++publishes & 1023) == 0) [[unlikely]] {
         ReportBatched();
@@ -835,7 +840,11 @@ void GpuSplit::Backoff(u32 spins, u64 target) {
     front_waiting.store(true, std::memory_order_seq_cst);
     const u32 seen = front_wake.load(std::memory_order_seq_cst);
     if (consumed.load(std::memory_order_seq_cst) < target) {
+#ifdef _WIN32
+        Common::FutexWait(front_wake, seen);
+#else
         front_wake.wait(seen, std::memory_order_seq_cst);
+#endif
     }
     front_waiting.store(false, std::memory_order_relaxed);
 }
@@ -1298,7 +1307,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                 if (available == read_position && !stop_token.stop_requested() &&
                     !hook_requested.load(std::memory_order_seq_cst)) {
                     timeline_span.Set(0, {"phase", 2});
+#ifdef _WIN32
+                    Common::FutexWait(wake, seen);
+#else
                     wake.wait(seen, std::memory_order_seq_cst);
+#endif
                 }
                 back_waiting.store(false, std::memory_order_relaxed);
                 continue;
