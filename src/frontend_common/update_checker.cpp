@@ -200,6 +200,9 @@ std::optional<FritchiiVersion> ParseBuildVersion(std::string_view build_version)
 }
 
 std::optional<FritchiiVersion> RunningVersion() {
+    if (const auto v = ParseFritchiiVersion(Common::g_build_version)) {
+        return v;
+    }
     for (const std::string_view name : {"Yngchii-X3D", "Yngchii", "Fritchii"}) {
         if (std::string_view{Common::g_build_name} == name) {
             if (const auto v = ParseBuildVersion(fmt::format("{} {}", name, Common::g_build_version))) {
@@ -207,13 +210,7 @@ std::optional<FritchiiVersion> RunningVersion() {
             }
         }
     }
-    if (const auto v = ParseBuildVersion(Common::g_build_version)) {
-        return v;
-    }
-    if (const auto v = ParseFritchiiVersion(Common::g_build_version)) {
-        return v;
-    }
-    return FritchiiVersion{.major = 5, .minor = 1, .patch = 0};
+    return ParseBuildVersion(Common::g_build_version);
 }
 
 std::optional<FritchiiVersion> ParseFritchiiTag(std::string_view tag) {
