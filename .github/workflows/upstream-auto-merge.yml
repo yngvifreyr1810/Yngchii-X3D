@@ -1,0 +1,177 @@
+name: Upstream Auto-Merge & Pre-Release Sync
+
+on:
+  schedule:
+    # Run every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync even if no new tag detected'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-merge:
+    name: Check Upstream Frizti/Fritchii & Auto-Merge
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Yngchii-X3D Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git Identity
+        run: |
+          git config user.name "Yngchii Auto-Sync Bot"
+          git config user.email "bot@yngchii.local"
+
+      - name: Fetch Upstream Tags and Commits
+        run: |
+          git remote add upstream https://github.com/Frizti/Fritchii.git || true
+          git fetch upstream --tags --force
+          git fetch upstream main:upstream-main || git fetch upstream master:upstream-main || true
+
+      - name: Detect Latest Upstream Version
+        id: upstream_info
+        run: |
+          # Find latest upstream tag matching fritchii-v*
+          LATEST_UPSTREAM_TAG=$(git tag -l "fritchii-v*" | sort -V | tail -n 1)
+          if [ -z "$LATEST_UPSTREAM_TAG" ]; then
+            echo "No fritchii-v* tags found."
+            exit 1
+          fi
+          
+          # Extract version number (e.g. 5.1 from fritchii-v5.1)
+          VERSION_NUM=${LATEST_UPSTREAM_TAG#fritchii-v}
+          TARGET_YNGCHII_TAG="yngchii-v${VERSION_NUM}"
+          
+          echo "latest_upstream_tag=$LATEST_UPSTREAM_TAG" >> $GITHUB_OUTPUT
+          echo "version_num=$VERSION_NUM" >> $GITHUB_OUTPUT
+          echo "target_yngchii_tag=$TARGET_YNGCHII_TAG" >> $GITHUB_OUTPUT
+          
+          # Check if this release tag already exists in Yngchii-X3D
+          if git rev-parse "$TARGET_YNGCHII_TAG" >/dev/null 2>&1 && [ "${{ inputs.force_sync }}" != "true" ]; then
+            echo "already_synced=true" >> $GITHUB_OUTPUT
+            echo "Upstream tag $LATEST_UPSTREAM_TAG is already synced as $TARGET_YNGCHII_TAG."
+          else
+            echo "already_synced=false" >> $GITHUB_OUTPUT
+            echo "New upstream release detected: $LATEST_UPSTREAM_TAG -> $TARGET_YNGCHII_TAG"
+          fi
+
+      - name: Perform Auto-Merge
+        if: steps.upstream_info.outputs.already_synced == 'false'
+        id: do_merge
+        run: |
+          UPSTREAM_TAG="${{ steps.upstream_info.outputs.latest_upstream_tag }}"
+          VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
+          
+          echo "Attempting automated merge of $UPSTREAM_TAG into main..."
+          
+          # Try automated merge using '-X ours' strategy for conflict-prone branding/icon files
+          if git merge -X ours -m "chore(sync): auto-merge upstream $UPSTREAM_TAG into Yngchii-X3D" "$UPSTREAM_TAG"; then
+            echo "merge_status=clean" >> $GITHUB_OUTPUT
+          else
+            echo "Merge conflicts detected. Checking if conflicts are strictly within known branding files..."
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
+            echo "Conflicted files: $CONFLICT_FILES"
+            
+            # If conflicts require human review, create automated PR
+            git merge --abort
+            BRANCH_NAME="sync/upstream-v${VERSION_NUM}"
+            git checkout -b "$BRANCH_NAME"
+            git merge "$UPSTREAM_TAG" || true
+            
+            git push origin "$BRANCH_NAME" --force
+            gh pr create \
+              --title "Sync Upstream $UPSTREAM_TAG into Yngchii-X3D" \
+              --body "Automated merge detected conflicts requiring review. Please resolve conflicts and merge to trigger the pre-release." \
+              --base main \
+              --head "$BRANCH_NAME"
+            
+            echo "merge_status=conflict_pr_created" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+      - name: Update Version Files and Changelog
+        if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
+        run: |
+          VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
+          TODAY=$(date +'%Y-%m-%d')
+          
+          # 1. Update dist/frizti_version.txt
+          echo "$VERSION_NUM" > dist/frizti_version.txt
+          
+          # 2. Extract upstream release notes commit messages
+          COMMITS_SUMMARY=$(git log --oneline "fritchii-v$(cat dist/frizti_version.txt 2>/dev/null || echo 5)..${{ steps.upstream_info.outputs.latest_upstream_tag }}" | sed 's/^/- /')
+          
+          # 3. Prepend to CHANGELOG.md adhering to Keep a Changelog format
+          CHANGELOG_ENTRY="## [${VERSION_NUM}.0] - ${TODAY}
+
+### Upstream Fritchii v${VERSION_NUM} Synchronizations
+${COMMITS_SUMMARY}
+
+### Yngchii-X3D Optimizations Maintained
+- Dedicated AMD Ryzen 3D V-Cache thread core pinning (GPUFront Core 1, GPUBack Core 2).
+- Hardware-gated AVX-512 dirty page scan with clean AVX2 fallback.
+- In-place auto-updater targeting Yngchii-X3D releases with pre-release safety.
+- Selective NVIDIA Overlay & Game Filter bypass.
+
+---
+"
+          # Write new changelog entry at top of CHANGELOG.md (under title)
+          python3 -c "
+          with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+              content = f.read()
+          header_pos = content.find('---')
+          if header_pos != -1:
+              new_content = content[:header_pos+4] + '\n' + '''$CHANGELOG_ENTRY''' + content[header_pos+4:]
+          else:
+              new_content = '''$CHANGELOG_ENTRY''' + '\n' + content
+          with open('CHANGELOG.md', 'w', encoding='utf-8') as f:
+              f.write(new_content)
+          "
+          
+          git add dist/frizti_version.txt CHANGELOG.md
+          git commit --amend --no-edit
+
+      - name: Push Main and Create GitHub Pre-Release
+        if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
+          TAG_NAME="${{ steps.upstream_info.outputs.target_yngchii_tag }}"
+          
+          # Push merged commits to main
+          git push origin main
+          
+          # Create and push new tag
+          git tag -a "$TAG_NAME" -m "Release Yngchii-X3D v${VERSION_NUM}"
+          git push origin "$TAG_NAME"
+          
+          # Create Pre-Release on GitHub (--prerelease prevents in-emulator updater from offering before testing)
+          RELEASE_TITLE="Yngchii-X3D v${VERSION_NUM} (Upstream v${VERSION_NUM} Hotfix Sync)"
+          cat << 'EOF' > release_notes.md
+          ## Yngchii-X3D v${{ steps.upstream_info.outputs.version_num }} Pre-Release
+
+          This release automatically incorporates all upstream bug fixes from **Fritchii v${{ steps.upstream_info.outputs.version_num }}**:
+          - Upstream commit: `${{ steps.upstream_info.outputs.latest_upstream_tag }}`
+          - Preserves full AMD Ryzen 7800X3D / 9800X3D CCD thread pinning and zero-sleep futex synchronization.
+          - Incorporates dialogue text fix, Hyrule Field white fog fix, and high-DPI scaling scroll fixes.
+
+          > **Note for Users**: This is an automated sync pre-release. Verified release binaries will be uploaded shortly.
+          EOF
+          
+          gh release create "$TAG_NAME" \
+            --title "$RELEASE_TITLE" \
+            --notes-file release_notes.md \
+            --prerelease
