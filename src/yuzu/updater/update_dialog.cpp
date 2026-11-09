@@ -43,7 +43,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t ExeName[] = L"lichii.exe";
+constexpr wchar_t ExeName[] = L"Yngchii-X3D.exe";
+constexpr wchar_t FallbackExeName[] = L"lichii.exe";
 // Set for a restarted process to a note it shows once it is up, such as "v5 is installed".
 constexpr char RestartNoteVariable[] = "LICHII_UPDATE_NOTE";
 
@@ -311,9 +312,12 @@ void UpdateDialog::InstallInPlace() {
     }
     fs::remove(archive, ec);
 
-    const auto package = UpdateInstaller::FindPackageRoot(unpacked, ExeName);
+    auto package = UpdateInstaller::FindPackageRoot(unpacked, ExeName);
     if (!package) {
-        fail(tr("The downloaded update does not contain lichii.exe."));
+        package = UpdateInstaller::FindPackageRoot(unpacked, FallbackExeName);
+    }
+    if (!package) {
+        fail(tr("The downloaded update does not contain %1.").arg(QString::fromWCharArray(ExeName)));
         return;
     }
 
@@ -486,8 +490,8 @@ bool CanInstallInPlace() {
     const auto exe = LaunchExe();
     return UpdateChecker::RunningVersion().has_value() && !exe.empty() &&
            !UpdateInstaller::IsUpdaterFolder(install_dir) &&
-           QString::fromStdWString(exe.filename().wstring())
-                   .compare(QString::fromWCharArray(ExeName), Qt::CaseInsensitive) == 0;
+           (QString::fromStdWString(exe.filename().wstring()).compare(QString::fromWCharArray(ExeName), Qt::CaseInsensitive) == 0 ||
+            QString::fromStdWString(exe.filename().wstring()).compare(QString::fromWCharArray(FallbackExeName), Qt::CaseInsensitive) == 0);
 #else
     return false;
 #endif
@@ -608,7 +612,10 @@ void RollBack(QWidget* window) {
 
 bool Restart(QWidget* window, const QString& note) {
     // The install folder from startup: Qt's applicationDirPath() now names update-old.
-    const auto exe = InstallDir() / ExeName;
+    auto exe = InstallDir() / ExeName;
+    if (!fs::exists(exe)) {
+        exe = InstallDir() / FallbackExeName;
+    }
     const auto program = QString::fromStdWString(exe.wstring());
     std::error_code ec;
     if (UpdateInstaller::IsUpdaterFolder(exe.parent_path()) || !fs::is_regular_file(exe, ec)) {

@@ -33,9 +33,9 @@ std::optional<u64> ParseBuildNumber(std::string_view tag) {
     return number;
 }
 
-constexpr std::string_view ReleaseRepo = "Frizti/Lichii";
+constexpr std::string_view ReleaseRepo = "yngvifreyr1810/Yngchii-X3D";
 // Download URLs name the repository by its current name; GitHub redirects the old one.
-constexpr std::array RepoNames{std::string_view{"Lichii"}, std::string_view{"Fritchii"}};
+constexpr std::array RepoNames{std::string_view{"Yngchii-X3D"}, std::string_view{"Fritchii"}, std::string_view{"Lichii"}};
 
 std::optional<u32> ParseNumber(std::string_view text) {
     if (text.empty() || (text.size() > 1 && text.front() == '0') ||
@@ -167,7 +167,7 @@ std::optional<FritchiiVersion> ParseFritchiiVersion(std::string_view text) {
 }
 
 std::optional<FritchiiVersion> ParseBuildVersion(std::string_view build_version) {
-    for (const std::string_view prefix : {"Fritchii v", "Frizti v"}) {
+    for (const std::string_view prefix : {"Yngchii-X3D v", "Yngchii v", "Fritchii v", "Frizti v"}) {
         if (build_version.starts_with(prefix)) {
             return ParseFritchiiVersion(build_version.substr(prefix.size()));
         }
@@ -176,15 +176,16 @@ std::optional<FritchiiVersion> ParseBuildVersion(std::string_view build_version)
 }
 
 std::optional<FritchiiVersion> RunningVersion() {
-    // Fritchii builds carry the name apart from the version ("Fritchii" + "v4").
-    if (std::string_view{Common::g_build_name} == "Fritchii") {
-        return ParseBuildVersion(fmt::format("Fritchii {}", Common::g_build_version));
+    for (const std::string_view name : {"Yngchii-X3D", "Yngchii", "Fritchii"}) {
+        if (std::string_view{Common::g_build_name} == name) {
+            return ParseBuildVersion(fmt::format("{} {}", name, Common::g_build_version));
+        }
     }
     return ParseBuildVersion(Common::g_build_version);
 }
 
 std::optional<FritchiiVersion> ParseFritchiiTag(std::string_view tag) {
-    for (const std::string_view prefix : {"fritchii-v", "frizti-v"}) {
+    for (const std::string_view prefix : {"yngchii-v", "fritchii-v", "v", "frizti-v"}) {
         if (tag.starts_with(prefix)) {
             return ParseFritchiiVersion(tag.substr(prefix.size()));
         }
