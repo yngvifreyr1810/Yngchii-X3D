@@ -48,6 +48,7 @@ std::optional<Common::Net::Release> SelectUpdate(
 struct FritchiiVersion {
     u32 major{};
     u32 minor{};
+    u32 patch{};
 
     auto operator<=>(const FritchiiVersion&) const = default;
     std::string ToString() const;

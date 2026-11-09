@@ -107,11 +107,12 @@ jobs:
           VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
           TODAY=$(date +'%Y-%m-%d')
           
-          # 1. Update dist/frizti_version.txt
-          echo "$VERSION_NUM" > dist/frizti_version.txt
+          # 1. Extract previous version and upstream release commit messages
+          PREV_VERSION=$(cat dist/frizti_version.txt 2>/dev/null || echo 5)
+          COMMITS_SUMMARY=$(git log --oneline "fritchii-v${PREV_VERSION}..${{ steps.upstream_info.outputs.latest_upstream_tag }}" | sed 's/^/- /')
           
-          # 2. Extract upstream release notes commit messages
-          COMMITS_SUMMARY=$(git log --oneline "fritchii-v$(cat dist/frizti_version.txt 2>/dev/null || echo 5)..${{ steps.upstream_info.outputs.latest_upstream_tag }}" | sed 's/^/- /')
+          # 2. Update dist/frizti_version.txt
+          echo "$VERSION_NUM" > dist/frizti_version.txt
           
           # 3. Prepend to CHANGELOG.md adhering to Keep a Changelog format
           CHANGELOG_ENTRY="## [${VERSION_NUM}.0] - ${TODAY}

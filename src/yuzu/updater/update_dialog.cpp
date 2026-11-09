@@ -130,7 +130,7 @@ UpdateDialog::UpdateDialog(const Common::Net::Release& release,
                                            QString::fromStdString(release.body)));
         ui->version->setObjectName(QStringLiteral("FritchiiDialogTitle"));
         ui->version->setWordWrap(true);
-        resize(700, 640);
+        resize(720, 800);
     }
 
     ui->buttonBox->button(QDialogButtonBox::No)->setText(tr("Remind Me Later"));

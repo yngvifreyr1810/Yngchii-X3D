@@ -35,7 +35,7 @@ std::optional<u64> ParseBuildNumber(std::string_view tag) {
 
 constexpr std::string_view ReleaseRepo = "yngvifreyr1810/Yngchii-X3D";
 // Download URLs name the repository by its current name; GitHub redirects the old one.
-constexpr std::array RepoNames{std::string_view{"Yngchii-X3D"}, std::string_view{"Fritchii"}, std::string_view{"Lichii"}};
+[[maybe_unused]] constexpr std::array RepoNames{std::string_view{"Yngchii-X3D"}, std::string_view{"Fritchii"}, std::string_view{"Lichii"}};
 
 std::optional<u32> ParseNumber(std::string_view text) {
     if (text.empty() || (text.size() > 1 && text.front() == '0') ||
@@ -146,24 +146,48 @@ std::optional<Common::Net::Release> GetUpdate() {
 }
 
 std::string FritchiiVersion::ToString() const {
-    return minor == 0 ? fmt::format("{}", major) : fmt::format("{}.{}", major, minor);
+    if (patch != 0) {
+        return fmt::format("{}.{}.{}", major, minor, patch);
+    }
+    if (minor != 0) {
+        return fmt::format("{}.{}", major, minor);
+    }
+    return fmt::format("{}", major);
 }
 
 std::optional<FritchiiVersion> ParseFritchiiVersion(std::string_view text) {
-    const auto dot = text.find('.');
-    const auto major = ParseNumber(text.substr(0, dot));
+    if (text.starts_with('v') || text.starts_with('V')) {
+        text.remove_prefix(1);
+    }
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    const auto first_dot = text.find('.');
+    const auto major = ParseNumber(text.substr(0, first_dot));
     if (!major || *major == 0) {
         return std::nullopt;
     }
-    if (dot == std::string_view::npos) {
-        return FritchiiVersion{.major = *major};
+    if (first_dot == std::string_view::npos) {
+        return FritchiiVersion{.major = *major, .minor = 0, .patch = 0};
     }
-    // One decimal, and N.0 is spelled N, so each version has one tag and one package name.
-    const auto decimal = text.substr(dot + 1);
-    if (decimal.size() != 1 || decimal[0] < '1' || decimal[0] > '9') {
+    const auto rest = text.substr(first_dot + 1);
+    const auto second_dot = rest.find('.');
+    const auto minor = ParseNumber(rest.substr(0, second_dot));
+    if (!minor) {
         return std::nullopt;
     }
-    return FritchiiVersion{.major = *major, .minor = static_cast<u32>(decimal[0] - '0')};
+    if (second_dot == std::string_view::npos) {
+        return FritchiiVersion{.major = *major, .minor = *minor, .patch = 0};
+    }
+    const auto patch_sv = rest.substr(second_dot + 1);
+    if (patch_sv.find('.') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto patch = ParseNumber(patch_sv);
+    if (!patch) {
+        return std::nullopt;
+    }
+    return FritchiiVersion{.major = *major, .minor = *minor, .patch = *patch};
 }
 
 std::optional<FritchiiVersion> ParseBuildVersion(std::string_view build_version) {
@@ -178,10 +202,18 @@ std::optional<FritchiiVersion> ParseBuildVersion(std::string_view build_version)
 std::optional<FritchiiVersion> RunningVersion() {
     for (const std::string_view name : {"Yngchii-X3D", "Yngchii", "Fritchii"}) {
         if (std::string_view{Common::g_build_name} == name) {
-            return ParseBuildVersion(fmt::format("{} {}", name, Common::g_build_version));
+            if (const auto v = ParseBuildVersion(fmt::format("{} {}", name, Common::g_build_version))) {
+                return v;
+            }
         }
     }
-    return ParseBuildVersion(Common::g_build_version);
+    if (const auto v = ParseBuildVersion(Common::g_build_version)) {
+        return v;
+    }
+    if (const auto v = ParseFritchiiVersion(Common::g_build_version)) {
+        return v;
+    }
+    return FritchiiVersion{.major = 5, .minor = 1, .patch = 0};
 }
 
 std::optional<FritchiiVersion> ParseFritchiiTag(std::string_view tag) {
@@ -241,37 +273,78 @@ std::optional<Common::Net::Asset> SelectFritchiiAsset(const Common::Net::Release
     if (!version) {
         return std::nullopt;
     }
-    const auto filename = FritchiiAssetName(*version);
+
+#ifdef __AVX512F__
+    constexpr std::string_view PreferredKeyword = "Zen4-AVX512";
+    constexpr std::string_view FallbackKeyword = "Universal-AVX2";
+#else
+    constexpr std::string_view PreferredKeyword = "Universal-AVX2";
+    constexpr std::string_view FallbackKeyword = "Zen4-AVX512";
+#endif
+
+    const auto ver_str = version->ToString();
+    const std::string default_yngchii = fmt::format("Yngchii-X3D-v{}-Windows-x64.zip", ver_str);
+    const std::string default_fritchii = fmt::format("Fritchii-v{}-Windows-x64.zip", ver_str);
+
+    std::string preferred_url;
+    std::string fallback_url;
+    std::string generic_url;
+
     for (const auto& url : release.assets) {
-        std::string origin;
-        if (source.test) {
-            if (url.starts_with(source.origin + "/") && url.ends_with("/" + filename) &&
-                url.find("..") == std::string::npos &&
-                url.find_first_of("?#\\") == std::string::npos) {
-                origin = source.origin;
-            }
-        } else {
-            for (const auto repo : RepoNames) {
-                if (url == fmt::format("https://github.com/Frizti/{}/releases/download/{}/{}", repo,
-                                       release.tag, filename)) {
-                    origin = "https://github.com";
-                }
-            }
-        }
-        if (origin.empty()) {
+        if (!url.ends_with(".zip")) {
             continue;
         }
-        Common::Net::Asset asset{.name = "Fritchii",
-                                 .url = origin,
-                                 .path = url.substr(origin.size()),
-                                 .filename = filename};
-        if (const auto info = release.asset_info.find(url); info != release.asset_info.end()) {
-            asset.sha256 = info->second.sha256;
-            asset.size = info->second.size;
+
+        bool trusted = false;
+        if (source.test) {
+            trusted = url.starts_with(source.origin + "/") && url.find("..") == std::string::npos &&
+                      url.find_first_of("?#\\") == std::string::npos;
+        } else {
+            trusted = url.find("github.com/yngvifreyr1810/Yngchii-X3D/releases/download/") != std::string::npos ||
+                      url.find("github.com/Frizti/") != std::string::npos;
         }
-        return asset;
+        if (!trusted) {
+            continue;
+        }
+
+        if (url.find(PreferredKeyword) != std::string::npos) {
+            preferred_url = url;
+            break;
+        } else if (url.find(FallbackKeyword) == std::string::npos && url.find("Yngchii-X3D") != std::string::npos) {
+            generic_url = url;
+        } else if (url.ends_with("/" + default_fritchii) || url.ends_with("/" + default_yngchii)) {
+            fallback_url = url;
+        }
     }
-    return std::nullopt;
+
+    const std::string& chosen_url = !preferred_url.empty() ? preferred_url
+                                  : !generic_url.empty()   ? generic_url
+                                  : fallback_url;
+
+    if (chosen_url.empty()) {
+        return std::nullopt;
+    }
+
+    const auto slash = chosen_url.rfind('/');
+    const std::string filename = slash != std::string::npos ? chosen_url.substr(slash + 1) : default_yngchii;
+
+    std::string origin = "https://github.com";
+    if (source.test) {
+        origin = source.origin;
+    }
+
+    Common::Net::Asset asset{
+        .name = "Yngchii-X3D",
+        .url = origin,
+        .path = chosen_url.substr(origin.size()),
+        .filename = filename,
+    };
+
+    if (const auto info = release.asset_info.find(chosen_url); info != release.asset_info.end()) {
+        asset.sha256 = info->second.sha256;
+        asset.size = info->second.size;
+    }
+    return asset;
 }
 
 std::optional<Common::Net::Release> SelectFritchiiUpdate(
@@ -280,6 +353,9 @@ std::optional<Common::Net::Release> SelectFritchiiUpdate(
     const Common::Net::Release* selected = nullptr;
     FritchiiVersion newest = current;
     for (const auto& release : releases) {
+        if (release.prerelease) {
+            continue;
+        }
         const auto version = ParseFritchiiTag(release.tag);
         if (version && *version > newest && SelectFritchiiAsset(release, source)) {
             newest = *version;
