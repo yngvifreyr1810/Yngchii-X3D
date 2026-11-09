@@ -152,13 +152,15 @@ if (YUZU_STATIC_BUILD)
         # msys2 quazip does not build a static lib
         set(QuaZip-Qt6_FORCE_BUNDLED ON)
 
-        set(YUZU_USE_BUNDLED_FFMPEG ON)
+        # Use MSYS2 UCRT64 system FFmpeg (with full AV1 libdav1d decoding for OoT title screen)
+        set(YUZU_USE_BUNDLED_FFMPEG OFF)
         set(YUZU_USE_BUNDLED_SDL3 ON)
         set(YUZU_USE_BUNDLED_OPENSSL ON)
 
         set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF)
     elseif(APPLE)
-        set(YUZU_USE_BUNDLED_FFMPEG ON)
+        # Use MSYS2 UCRT64 system FFmpeg (with full AV1 libdav1d decoding for OoT title screen)
+        set(YUZU_USE_BUNDLED_FFMPEG OFF)
         set(YUZU_USE_BUNDLED_SDL3 ON)
         set(YUZU_USE_BUNDLED_OPENSSL ON)
 
