@@ -1185,13 +1185,29 @@ bool Device::GetSuitability(bool requires_swapchain) {
     FOR_EACH_VK_EXTENSION(EXTENSION);
 
     // Graphics pipelines linked from per-stage libraries (vk_pipeline_library): the Shader
-    // libraries setting turns them on for NVIDIA and AMD GPUs (Intel and others are untested),
-    // EDEN_NX2_GPL=1 for any GPU, EDEN_NX2_GPL=0 turns them off.
+    // libraries setting turns them on for NVIDIA GPUs and AMD's Mesa driver (Intel and others are
+    // untested), EDEN_NX2_GPL=1 for any GPU, EDEN_NX2_GPL=0 turns them off. Not on AMD's Windows
+    // driver: RX 5000 and 6000 owners crash building library pipelines from their cache
+    // (amdvlk64.dll; unticking Shader libraries is their workaround, 2026-11-09), and the
+    // precompile preparation now does the first-time builds those libraries were for.
     graphics_pipeline_library_requested = [this] {
         if (const char* value = std::getenv("EDEN_NX2_GPL"); value && *value) {
             return *value != '0';
         }
         const u32 vendor = properties.properties.vendorID;
+        // Not properties.driver: it is read further down (it was 0 here, and v5.2 left the
+        // libraries on for these cards). On Windows AMD's Vulkan driver is the proprietary one.
+#ifdef _WIN32
+        constexpr bool amd_windows_driver = true;
+#else
+        constexpr bool amd_windows_driver = false;
+#endif
+        if (vendor == 0x1002 && amd_windows_driver &&
+            Settings::values.use_graphics_pipeline_library.GetValue()) {
+            LOG_INFO(Render_Vulkan, "Nx2Perf gpl: shader libraries off on AMD's proprietary "
+                                    "driver (EDEN_NX2_GPL=1 turns them on)");
+            return false;
+        }
         return Settings::values.use_graphics_pipeline_library.GetValue() &&
                (vendor == 0x10DE || vendor == 0x1002);
     }();
@@ -1702,6 +1718,12 @@ void Device::RemoveUnsuitableExtensions() {
     features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
     features.mesh_shader.meshShaderQueries = VK_FALSE;
     extensions.mesh_shader = features.mesh_shader.taskShader && features.mesh_shader.meshShader;
+    // EDEN_NX2_FORCE_MESH_FALLBACK=1: leave VK_EXT_mesh_shader disabled, so task/mesh draws take
+    // the compute fallback a device without it uses.
+    if (extensions.mesh_shader && std::getenv("EDEN_NX2_FORCE_MESH_FALLBACK") != nullptr) {
+        LOG_WARNING(Render_Vulkan, "EDEN_NX2_FORCE_MESH_FALLBACK: VK_EXT_mesh_shader disabled");
+        extensions.mesh_shader = false;
+    }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 

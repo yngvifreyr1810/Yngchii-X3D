@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.3.0] - 2026-11-09
+
+### Upstream Fritchii v5.3 Synchronizations
+- Upstream synchronizations from fritchii-v5.3
+
+### Yngchii-X3D Optimizations Maintained
+- Dedicated AMD Ryzen 3D V-Cache thread core pinning (GPUFront Core 1, GPUBack Core 2).
+- Hardware-gated AVX-512 dirty page scan with clean AVX2 fallback.
+- In-place auto-updater targeting Yngchii-X3D releases with pre-release safety.
+- Selective NVIDIA Overlay & Game Filter bypass.
+
+---
+
+
 ## [5.1.0] - 2026-11-09
 
 ### Added & Enhanced
