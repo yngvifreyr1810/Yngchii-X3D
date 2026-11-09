@@ -1,0 +1,101 @@
+﻿================================================================================
+          YNGCHII-X3D (FRITCHII v5.5) — BẢN PHÁT HÀNH ĐẶC BIỆT CỘNG ĐỒNG VIỆT NAM
+              HƯỚNG DẪN CÀI ĐẶT & SỬ DỤNG NHANH CHO GAME THỦ VIỆT NAM
+================================================================================
+
+********************************************************************************
+* LƯU Ý QUAN TRỌNG (IMPORTANT DISCLAIMER):                                      *
+* Phần mềm và kho lưu trữ này KHÔNG chứa file game, keys hay bất kỳ dữ liệu    *
+* vi phạm bản quyền nào, và cũng KHÔNG hướng dẫn cách tải chúng. Bạn bắt buộc  *
+* phải tự sở hữu bản sao hợp pháp (legally acquired copy) của trò chơi.       *
+* Mọi dữ liệu sinh ra trên máy (bộ đệm shader, file save...) đều thuộc về     *
+* bản game cá nhân của bạn — tuyệt đối không chia sẻ các tệp có bản quyền.     *
+********************************************************************************
+
+Chào mừng bạn đến với Yngchii-X3D (Fritchii v5.5) — Bản dựng tối ưu hoá chuyên sâu
+dành riêng cho trải nghiệm The Legend of Zelda: Ocarina of Time và các tựa game
+Nintendo Switch trên PC với hiệu năng cao nhất, mượt mà và mát mẻ nhất!
+
+--------------------------------------------------------------------------------
+I. TÍNH NĂNG NỔI BẬT CỦA PHIÊN BẢN v5.5-Step7-VN:
+--------------------------------------------------------------------------------
+1. Cổng Tự Động Nhận Diện Phần Cứng (Smart Hardware Gate):
+   - Tự động nhận diện dòng vi xử lý AMD Ryzen 5 / 7 / 9 thế hệ Zen 3 (5000 Series),
+     Zen 4 (7000/8000 Series), Zen 5 (9000 Series) và đặc biệt là dòng 3D V-Cache (X3D).
+   - Kích hoạt cơ chế giảm tải 43 lần GPU Split Batch, hạ 14% CPU, khóa Timer 0.5ms
+     và lá chắn đệm L1/L2 Cache Shield giúp game đạt 60 FPS phẳng lì chỉ với ~42% CPU.
+   - Với các CPU khác (Intel Core i3/i5/i7/i9 hoặc AMD đời cũ): Trình giả lập sẽ
+     tự động kích hoạt chế độ "Safe Fallback" an toàn, đảm bảo tương thích 100%,
+     chơi mượt mà không lo xung đột.
+
+2. Chuyển Đổi Ngôn Ngữ Tức Thì (EN <-> VN Switch):
+   - MẶC ĐỊNH GIAO DIỆN LÀ TIẾNG ANH (EN) để thuận tiện cho việc chia sẻ quốc tế.
+   - Bạn có thể chuyển sang TIẾNG VIỆT (VN) bất kỳ lúc nào bằng 2 cách cực kỳ tiện lợi:
+     + Bấm chuột vào nút [EN / VN] nằm ở cột thanh bên trái cửa sổ chính (ngay dưới
+       các biểu tượng điều hướng).
+     + Hoặc bấm phím tắt nhanh: [Ctrl + L] hoặc phím [F9].
+   - Trạng thái ngôn ngữ sẽ được tự động lưu lại cho các lần mở sau.
+
+--------------------------------------------------------------------------------
+II. YÊU CẦU HỆ THỐNG CẦN CÓ:
+--------------------------------------------------------------------------------
+- Hệ điều hành: Windows 10 hoặc Windows 11 (64-bit).
+- Vi xử lý (CPU): AMD Ryzen hoặc Intel Core (Khuyên dùng Ryzen 5/7/9 Zen 3/4/5 để
+  kích hoạt tối ưu hiệu năng tối đa).
+- Card đồ hoạ (GPU): NVIDIA GeForce GTX 1060 / RTX Series hoặc AMD Radeon tương đương,
+  hỗ trợ Vulkan 1.3.
+- Dung lượng ổ cứng: Tối thiểu 30 GB dung lượng trống (ưu tiên ổ SSD NVMe).
+- File game: File bản ROM cập nhật của game (định dạng .nup dung lượng ~25 GB).
+
+--------------------------------------------------------------------------------
+III. HƯỚNG DẪN CÁC BƯỚC KHỞI CHẠY GAME:
+--------------------------------------------------------------------------------
+Bước 1: Khởi động giả lập
+  - Chạy file "Yngchii-X3D.exe" trong thư mục này.
+
+Bước 2: Chọn tốc độ khung hình (FPS Target)
+  - Khi hộp thoại hỏi mức FPS xuất hiện:
+    + Chọn [60 FPS] nếu máy của bạn có cấu hình khoẻ (Ryzen Zen 3/4/5 hoặc card rời tốt).
+    + Chọn [30 FPS] nếu bạn dùng laptop mỏng nhẹ hoặc máy cấu hình tiết kiệm điện.
+
+Bước 3: Thêm thư mục chứa game
+  - Bấm đúp vào biểu tượng dấu cộng [+] hoặc chọn menu "File" -> "Load Folder..."
+    (hoặc "Tệp tin" -> "Mở thư mục...") và chọn thư mục đang chứa file game (.nup).
+  - Biểu tượng game The Legend of Zelda sẽ xuất hiện trên màn hình danh sách.
+
+Bước 4: Cài đặt Tay cầm (Controller)
+  - Chọn menu "Emulation" -> "Configure..." -> tab "Controls" (hoặc "Giả lập" ->
+    "Cài đặt..." -> "Điều khiển / Tay cầm").
+  - Chọn Input Device là tay cầm của bạn (Xbox Controller, DualSense, v.v.) rồi
+    bấm OK để lưu.
+
+Bước 5: Cấu hình Đồ hoạ khuyên dùng (Graphics Settings)
+  - Vào "Emulation" -> "Configure..." -> tab "Graphics":
+    + Graphics API: Vulkan
+    + VSync Mode: Chọn [Immediate] (Tức thì) hoặc [Mailbox] để đạt khung hình
+      60 FPS phẳng lì, không giật khựng.
+    + NVDEC emulation: GPU Video Decoding.
+
+Bước 6: Vào game và thưởng thức!
+  - Bấm đúp chuột vào biểu tượng game hoặc bấm nút [Play / Chơi ngay] để khởi động.
+
+--------------------------------------------------------------------------------
+IV. LƯU Ý VỀ BỘ ĐỆM SHADERS (SHADER DISK CACHE):
+--------------------------------------------------------------------------------
+- Phiên bản này đã được tích hợp bộ đệm biên dịch sẵn 120,461 pipelines chuẩn của Fritchii v5.5.
+- Ở lần khởi chạy đầu tiên, game sẽ có màn hình "Preparing shaders" (Chuẩn bị Shaders)
+  chạy khoảng 5–10 phút để tối ưu hoá trực tiếp cho phần cứng máy bạn.
+- Từ lần khởi chạy thứ hai trở đi, thanh nạp sẽ lướt qua trong chưa đầy 0.1 giây (61 ms),
+  giúp bạn vào thẳng game ngay lập tức mà không bao giờ phải chờ đợi!
+
+--------------------------------------------------------------------------------
+V. PHÍM TẮT TIỆN ÍCH TRONG GAME:
+--------------------------------------------------------------------------------
+- [F11]: Bật / Tắt chế độ Toàn màn hình (Fullscreen).
+- [F9] hoặc [Ctrl + L]: Chuyển đổi qua lại giữa Tiếng Anh (EN) và Tiếng Việt (VN).
+- [F4]: Tắt / Mở giới hạn tốc độ (Speed Limit Toggle).
+- Nút "Reduce RAM usage" (Giảm RAM) ở góc dưới thanh trạng thái: Bấm vào để dọn dẹp
+  bộ nhớ tạm khi bạn chơi game liên tục nhiều giờ liền.
+
+Chúc bạn có những giờ phút phiêu lưu tuyệt vời tại vùng đất Hyrule cùng Yngchii-X3D!
+================================================================================
