@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
           
-          # Extract version number (e.g. 5.1 from fritchii-v5.1)
+          # Extract version number (e.g. 5.2 from fritchii-v5.2)
           VERSION_NUM=${LATEST_UPSTREAM_TAG#fritchii-v}
           TARGET_YNGCHII_TAG="yngchii-v${VERSION_NUM}"
           
@@ -101,46 +101,10 @@ jobs:
             exit 0
           fi
 
-      - name: Update Version Files and Changelog
+      - name: Update Version Files, Changelog, and Release Notes
         if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
         run: |
-          VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
-          TODAY=$(date +'%Y-%m-%d')
-          
-          # 1. Extract previous version and upstream release commit messages
-          PREV_VERSION=$(cat dist/frizti_version.txt 2>/dev/null || echo 5)
-          COMMITS_SUMMARY=$(git log --oneline "fritchii-v${PREV_VERSION}..${{ steps.upstream_info.outputs.latest_upstream_tag }}" | sed 's/^/- /')
-          
-          # 2. Update dist/frizti_version.txt
-          echo "$VERSION_NUM" > dist/frizti_version.txt
-          
-          # 3. Prepend to CHANGELOG.md adhering to Keep a Changelog format
-          CHANGELOG_ENTRY="## [${VERSION_NUM}.0] - ${TODAY}
-
-### Upstream Fritchii v${VERSION_NUM} Synchronizations
-${COMMITS_SUMMARY}
-
-### Yngchii-X3D Optimizations Maintained
-- Dedicated AMD Ryzen 3D V-Cache thread core pinning (GPUFront Core 1, GPUBack Core 2).
-- Hardware-gated AVX-512 dirty page scan with clean AVX2 fallback.
-- In-place auto-updater targeting Yngchii-X3D releases with pre-release safety.
-- Selective NVIDIA Overlay & Game Filter bypass.
-
----
-"
-          # Write new changelog entry at top of CHANGELOG.md (under title)
-          python3 -c "
-          with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
-              content = f.read()
-          header_pos = content.find('---')
-          if header_pos != -1:
-              new_content = content[:header_pos+4] + '\n' + '''$CHANGELOG_ENTRY''' + content[header_pos+4:]
-          else:
-              new_content = '''$CHANGELOG_ENTRY''' + '\n' + content
-          with open('CHANGELOG.md', 'w', encoding='utf-8') as f:
-              f.write(new_content)
-          "
-          
+          python3 .github/scripts/sync_release.py "${{ steps.upstream_info.outputs.version_num }}" "${{ steps.upstream_info.outputs.latest_upstream_tag }}"
           git add dist/frizti_version.txt CHANGELOG.md
           git commit --amend --no-edit
 
@@ -161,17 +125,6 @@ ${COMMITS_SUMMARY}
           
           # Create Pre-Release on GitHub (--prerelease prevents in-emulator updater from offering before testing)
           RELEASE_TITLE="Yngchii-X3D v${VERSION_NUM} (Upstream v${VERSION_NUM} Hotfix Sync)"
-          cat << 'EOF' > release_notes.md
-          ## Yngchii-X3D v${{ steps.upstream_info.outputs.version_num }} Pre-Release
-
-          This release automatically incorporates all upstream bug fixes from **Fritchii v${{ steps.upstream_info.outputs.version_num }}**:
-          - Upstream commit: `${{ steps.upstream_info.outputs.latest_upstream_tag }}`
-          - Preserves full AMD Ryzen 7800X3D / 9800X3D CCD thread pinning and zero-sleep futex synchronization.
-          - Incorporates dialogue text fix, Hyrule Field white fog fix, and high-DPI scaling scroll fixes.
-
-          > **Note for Users**: This is an automated sync pre-release. Verified release binaries will be uploaded shortly.
-          EOF
-          
           gh release create "$TAG_NAME" \
             --title "$RELEASE_TITLE" \
             --notes-file release_notes.md \
