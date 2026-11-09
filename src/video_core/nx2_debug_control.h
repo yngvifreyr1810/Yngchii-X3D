@@ -370,7 +370,9 @@ inline void LoadExperiments() {
         // that ran (zortos293/Lichii#805 62db242b34; see the EXP39 notes above). Timing only.
         g_experiments[39].store(3, std::memory_order_relaxed);
         // EXP26 = 3 (Yngchii-X3D): bits 1 + 2 (1 = BUFCACHE_BANK skip check on streamed <=4KiB uniform buffers + 2 = PAGE_CMP inline SIMD compare).
-        g_experiments[26].store(3, std::memory_order_relaxed);
+        // EXP26 = 2: Bit 1 only (inline AVX2/AVX-512 SIMD page equality check via Nx2BytesEqual).
+        // Bit 0 (skipping stream buffer check) is intentionally omitted as it causes black title screen in OoT.
+        g_experiments[26].store(2, std::memory_order_relaxed);
         for (int n = 0; n < ExperimentCount; ++n) {
             const std::string name = "EDEN_NX2_EXP" + std::to_string(n);
             if (const char* value = std::getenv(name.c_str())) {

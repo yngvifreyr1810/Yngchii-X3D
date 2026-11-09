@@ -21,6 +21,7 @@
 
 namespace Core {
 LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wchar_t *argv_w[]) noexcept {
+    optind = 1;
     LaunchParams p{};
 
     int option_index = 0;

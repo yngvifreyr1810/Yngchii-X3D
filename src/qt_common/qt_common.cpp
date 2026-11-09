@@ -24,6 +24,8 @@
 #include "qt_common/util/meta.h"
 
 #include <QFile>
+#include <QImageReader>
+#include <QStringList>
 
 #include <QMessageBox>
 
@@ -249,6 +251,11 @@ void Init(QWidget* root) {
     LOG_INFO(Frontend, "Yngchii-X3D Version: {}", BuildVersionString());
     const auto& x3d = Common::DetectRyzenX3DCpu();
     LOG_INFO(Frontend, "[Yngchii-X3D v5] CPU Topology: {}", x3d.status_summary);
+    QStringList img_fmts;
+    for (const auto& fmt : QImageReader::supportedImageFormats()) {
+        img_fmts << QString::fromLatin1(fmt);
+    }
+    LOG_INFO(Frontend, "[Yngchii-X3D v5] Image Formats: {}", img_fmts.join(QStringLiteral(", ")).toStdString());
     LogRuntimes();
 #ifdef ARCHITECTURE_x86_64
     const auto& caps = Common::g_cpu_caps;
