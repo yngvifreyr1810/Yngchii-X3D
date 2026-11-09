@@ -15,6 +15,7 @@
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "common/cpu_features.h"
+#include "common/x3d_detect.h"
 #include "core/memory.h"
 
 #include <QGuiApplication>
@@ -217,9 +218,7 @@ std::string BuildVersionString() {
     const auto build_id = std::string(Common::g_build_id);
 
     const auto yuzu_build =
-        std::string_view{Common::g_build_name} == "Fritchii"
-            ? fmt::format("Fritchii {} | {}-{}", Common::g_build_version, branch_name, description)
-            : fmt::format("Lichii Development Build | {}-{}", branch_name, description);
+        fmt::format("Yngchii-X3D | v5 | Fritchii {}-{}", branch_name, description);
     const auto override_build =
         fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
     return override_build.empty() ? yuzu_build : override_build;
@@ -247,7 +246,9 @@ void Init(QWidget* root) {
     const auto processor_count = std::thread::hardware_concurrency();
 
     // info logging
-    LOG_INFO(Frontend, "Lichii Version: {}", BuildVersionString());
+    LOG_INFO(Frontend, "Yngchii-X3D Version: {}", BuildVersionString());
+    const auto& x3d = Common::DetectRyzenX3DCpu();
+    LOG_INFO(Frontend, "[Yngchii-X3D v5] CPU Topology: {}", x3d.status_summary);
     LogRuntimes();
 #ifdef ARCHITECTURE_x86_64
     const auto& caps = Common::g_cpu_caps;

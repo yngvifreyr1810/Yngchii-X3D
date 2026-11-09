@@ -134,6 +134,8 @@ add_library(
     thread.h
     thread_pinning.cpp
     thread_pinning.h
+    x3d_detect.cpp
+    x3d_detect.h
     nx2_sample_profile.cpp
     nx2_timeline.cpp
     nx2_timeline.h

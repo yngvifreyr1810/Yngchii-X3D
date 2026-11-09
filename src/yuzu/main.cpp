@@ -12,6 +12,8 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "startup_checks.h"
+#include "common/logging.h"
+#include "common/x3d_detect.h"
 
 #if YUZU_ROOM
 #include <cstring>
@@ -179,6 +181,29 @@ static void LoadNx2Switches(const char* argv0) {
 }
 
 int main(int argc, char* argv[]) {
+    auto set_env_if_missing = [](const char* name, const char* value) {
+        if (std::getenv(name) == nullptr) {
+#ifdef _WIN32
+            _putenv_s(name, value);
+#else
+            setenv(name, value, 1);
+#endif
+        }
+    };
+    // Universal Selective Overlay Filter: blocks NVIDIA In-Game Overlay / Ansel hooks
+    // that drain ~500 MB VRAM & cause 8-15% FPS drops, while preserving RTSS / MSI Afterburner.
+    set_env_if_missing("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
+    set_env_if_missing("NV_ALLOW_ANSEL", "0");
+    set_env_if_missing("ANSEL_SDK_DISABLE", "1");
+    // Hardware-Aware Ryzen X3D Thread & Guest Core Pinning
+    const auto& x3d = Common::DetectRyzenX3DCpu();
+    LOG_INFO(Frontend, "[Yngchii-X3D v5] CPU Detected: {}", x3d.status_summary);
+    if (x3d.is_supported_x3d) {
+        set_env_if_missing("EDEN_NX2_PIN_THREADS", "1");
+        if (x3d.physical_cores >= 8) {
+            set_env_if_missing("EDEN_NX2_GUEST_PIN_EACH", "1");
+        }
+    }
 #ifdef ENABLE_UPDATE_CHECKER
     // Before the switches are added to the environment, which a restart must not inherit.
     Updater::PrepareLaunch();
@@ -215,7 +240,7 @@ int main(int argc, char* argv[]) {
 
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("eden"));
-    QCoreApplication::setApplicationName(QStringLiteral("Lichii"));
+    QCoreApplication::setApplicationName(QStringLiteral("Yngchii-X3D"));
 
     // Increases the maximum open file limit.
     // TODO: This should be common to all frontends.

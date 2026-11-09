@@ -13,7 +13,7 @@ else()
     find_package(PkgConfig QUIET)
     pkg_search_module(LZ4 QUIET IMPORTED_TARGET liblz4)
 
-    if (MSYS2)
+    if (MSYS2 AND TARGET PkgConfig::LZ4)
         FixMsysPath(PkgConfig::LZ4)
     endif()
 
