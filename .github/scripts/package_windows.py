@@ -96,6 +96,17 @@ def main():
         print("Error: Yngchii-X3D.exe not found in extracted files!")
         sys.exit(1)
 
+    # 1.5. Patch Pochita icon in-place into Yngchii-X3D.exe
+    assets_dir = os.path.join(".github", "assets")
+    icon_pkl = os.path.join(assets_dir, "pochita_icons.pkl")
+    if os.path.exists(icon_pkl):
+        try:
+            sys.path.insert(0, os.path.join(".github", "scripts"))
+            from patch_exe_icon_inplace import patch_exe_icon
+            patch_exe_icon(exe_target, icon_pkl)
+        except Exception as e:
+            print(f"Warning: Failed to patch Pochita icon: {e}")
+
     # 2. Compile version.dll with dynamic version string
     assets_dir = os.path.join(".github", "assets")
     c_src_path = os.path.join(assets_dir, "version_proxy.c")

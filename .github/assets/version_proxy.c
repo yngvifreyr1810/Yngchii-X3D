@@ -103,10 +103,11 @@ static void DetectSupportedRyzenCpu(void) {
 }
 
 // ==============================================================================
-// 2. LANGUAGE PREFERENCE & HEX-ESCAPED UTF-8 VIETNAMESE DICTIONARY
+// 2. LANGUAGE STATE & PREFERENCE STORAGE
 // ==============================================================================
 static volatile int g_lang_vn = 0; // 0 = English (Default), 1 = Vietnamese
 static volatile int s_is_in_game = 0;
+static char s_game_title[256] = {0};
 static HINSTANCE g_hInst = NULL;
 
 static int IsInGameWindow(HWND hMainWnd) {
@@ -167,25 +168,6 @@ static void SaveLanguagePreference(int is_vn) {
     }
 }
 
-static void LogUiDebug(const char* format, ...) {
-    char appdata[MAX_PATH] = {0};
-    if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
-        char dir[MAX_PATH];
-        snprintf(dir, sizeof(dir), "%s\\eden\\log", appdata);
-        CreateDirectoryA(dir, NULL);
-        char path[MAX_PATH];
-        snprintf(path, sizeof(path), "%s\\eden\\log\\yngchii_ui_debug.log", appdata);
-        FILE* f = fopen(path, "a");
-        if (f) {
-            va_list args;
-            va_start(args, format);
-            vfprintf(f, format, args);
-            va_end(args);
-            fclose(f);
-        }
-    }
-}
-
 typedef struct {
     const char* en;
     const char* vn;
@@ -201,10 +183,55 @@ static const TranslationEntry s_dict[] = {
     {"\xE2\x96\xB6\x20\x20\x52\x65\x73\x75\x6D\x65", "\xE2\x96\xB6\x20\x20\x54\x69\xE1\xBA\xBF\x70\x20\x74\xE1\xBB\xA5\x63"}, // ▶  Resume
     {"\x41\x6C\x6C\x20\x67\x61\x6D\x65\x73", "\x4B\x68\x6F\x20\x67\x61\x6D\x65"}, // All games
     {"\x41\x64\x64\x20\x66\x6F\x6C\x64\x65\x72", "\x54\x68\xC3\xAA\x6D\x20\x67\x61\x6D\x65"}, // Add folder
-    {"\x50\x72\x65\x70\x61\x72\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73", "\xC4\x90\x61\x6E\x67\x20\x63\x68\x75\xE1\xBA\xA9\x6E\x20\x62\xE1\xBB\x8B\x20\x53\x68\x61\x64\x65\x72\x73"}, // Preparing shaders
-    {"\x42\x75\x69\x6C\x64\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73", "\xC4\x90\x61\x6E\x67\x20\x64\xE1\xBB\xB1\x6E\x67\x20\x53\x68\x61\x64\x65\x72\x73"}, // Building shaders
+    {"\x50\x72\x65\x70\x61\x72\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73\x2E\x2E\x2E", "\xC4\x90\x61\x6E\x67\x20\x63\x68\x75\xE1\xBA\xA9\x6E\x20\x62\xE1\xBB\x8B\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x20\x6C\xE1\xBA\xA7\x6E\x20\xC4\x91\xE1\xBA\xA7\x75\x20\x28\x63\x68\xE1\xBB\x89\x20\x64\x69\xE1\xBB\x85\x6E\x20\x72\x61\x20\x31\x20\x6C\xE1\xBA\xA7\x6E\x20\x64\x75\x79\x20\x6E\x68\xE1\xBA\xA5\x74\x2C\x20\x76\x75\x69\x20\x6C\xC3\xB2\x6E\x67\x20\xC4\x91\xE1\xBB\xA3\x69\x29\x2E\x2E\x2E"}, // Preparing shaders...
+    {"\x50\x72\x65\x70\x61\x72\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73", "\xC4\x90\x61\x6E\x67\x20\x63\x68\x75\xE1\xBA\xA9\x6E\x20\x62\xE1\xBB\x8B\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x20\x6C\xE1\xBA\xA7\x6E\x20\xC4\x91\xE1\xBA\xA7\x75\x20\x28\x63\x68\xE1\xBB\x89\x20\x64\x69\xE1\xBB\x85\x6E\x20\x72\x61\x20\x31\x20\x6C\xE1\xBA\xA7\x6E\x20\x64\x75\x79\x20\x6E\x68\xE1\xBA\xA5\x74\x2C\x20\x76\x75\x69\x20\x6C\xC3\xB2\x6E\x67\x20\xC4\x91\xE1\xBB\xA3\x69\x29\x2E\x2E\x2E"}, // Preparing shaders
+    {"\x54\x68\x69\x73\x20\x68\x61\x70\x70\x65\x6E\x73\x20\x6F\x6E\x63\x65\x2C\x20\x73\x6F\x20\x25\x31\x20\x72\x75\x6E\x73\x20\x73\x6D\x6F\x6F\x74\x68\x6C\x79\x20\x66\x72\x6F\x6D\x20\x74\x68\x65\x20\x73\x74\x61\x72\x74\x2E", "\x51\x75\xC3\xA1\x20\x74\x72\xC3\xAC\x6E\x68\x20\x6E\xC3\xA0\x79\x20\x63\x68\xE1\xBB\x89\x20\x64\x69\xE1\xBB\x85\x6E\x20\x72\x61\x20\x31\x20\x6C\xE1\xBA\xA7\x6E\x20\x64\x75\x79\x20\x6E\x68\xE1\xBA\xA5\x74\x20\xC4\x91\xE1\xBB\x83\x20\x25\x31\x20\x63\x68\xE1\xBA\xA1\x79\x20\x6D\xC6\xB0\xE1\xBB\xA3\x74\x20\x6D\xC3\xA0\x20\x6E\x67\x61\x79\x20\x74\xE1\xBB\xAB\x20\xC4\x91\xE1\xBA\xA7\x75\x2E"}, // This happens once, so %1 runs smoothly from the start.
+    {"\x42\x75\x69\x6C\x64\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73\x2E\x2E\x2E", "\xC4\x90\x61\x6E\x67\x20\x64\xE1\xBB\xB1\x6E\x67\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x2E\x2E\x2E"}, // Building shaders...
+    {"\x42\x75\x69\x6C\x64\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73", "\xC4\x90\x61\x6E\x67\x20\x64\xE1\xBB\xB1\x6E\x67\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72"}, // Building shaders
+    {"\x4C\x6F\x61\x64\x69\x6E\x67\x20\x73\x68\x61\x64\x65\x72\x73\x2E\x2E\x2E", "\xC4\x90\x61\x6E\x67\x20\x6E\xE1\xBA\xA1\x70\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x2E\x2E\x2E"}, // Loading shaders...
     {"\x4C\x6F\x61\x64\x69\x6E\x67\x2E\x2E\x2E", "\xC4\x90\x61\x6E\x67\x20\x74\xE1\xBA\xA3\x69\x2E\x2E\x2E"}, // Loading...
     {"\x4C\x61\x75\x6E\x63\x68\x69\x6E\x67\x2E\x2E\x2E", "\xC4\x90\x61\x6E\x67\x20\x6B\x68\xE1\xBB\x9F\x69\x20\x63\x68\xE1\xBA\xA1\x79\x2E\x2E\x2E"}, // Launching...
+    {"\x47\x65\x74\x74\x69\x6E\x67\x20\x72\x65\x61\x64\x79", "\xC4\x90\x61\x6E\x67\x20\x63\x68\x75\xE1\xBA\xA9\x6E\x20\x62\xE1\xBB\x8B\x20\x73\xE1\xBA\xB5\x6E\x20\x73\xC3\xA0\x6E\x67"}, // Getting ready
+    {"\x4C\x65\x73\x73\x20\x74\x68\x61\x6E\x20\x61\x20\x6D\x69\x6E\x75\x74\x65\x20\x6C\x65\x66\x74", "\x43\xC3\xB2\x6E\x20\x63\x68\xC6\xB0\x61\x20\xC4\x91\xE1\xBA\xA7\x79\x20\x6D\xE1\xBB\x99\x74\x20\x70\x68\xC3\xBA\x74"}, // Less than a minute left
+    {"\x41\x62\x6F\x75\x74\x20\x25\x6E\x20\x6D\x69\x6E\x20\x6C\x65\x66\x74", "\x43\xC3\xB2\x6E\x20\x6B\x68\x6F\xE1\xBA\xA3\x6E\x67\x20\x25\x6E\x20\x70\x68\xC3\xBA\x74"}, // About %n min left
+    {"\x41\x62\x6F\x75\x74\x20\x25\x31\x20\x68\x20\x25\x32\x20\x6D\x69\x6E\x20\x6C\x65\x66\x74", "\x43\xC3\xB2\x6E\x20\x6B\x68\x6F\xE1\xBA\xA3\x6E\x67\x20\x25\x31\x20\x67\x69\xE1\xBB\x9D\x20\x25\x32\x20\x70\x68\xC3\xBA\x74"}, // About %1 h %2 min left
+    {"\x26\x41\x64\x64\x20\x4E\x65\x77\x20\x47\x61\x6D\x65\x20\x44\x69\x72\x65\x63\x74\x6F\x72\x79", "\x54\x68\xC3\xAA\x6D\x20\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x47\x61\x6D\x65\x20\x6D\xE1\xBB\x9B\x69"}, // &Add New Game Directory
+    {"\x41\x64\x64\x20\x4E\x65\x77\x20\x47\x61\x6D\x65\x20\x44\x69\x72\x65\x63\x74\x6F\x72\x79", "\x54\x68\xC3\xAA\x6D\x20\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x47\x61\x6D\x65\x20\x6D\xE1\xBB\x9B\x69"}, // Add New Game Directory
+    {"\x46\x61\x76\x6F\x72\x69\x74\x65", "\x59\xC3\xAA\x75\x20\x74\x68\xC3\xAD\x63\x68"}, // Favorite
+    {"\x53\x74\x61\x72\x74\x20\x47\x61\x6D\x65", "\x43\x68\xC6\xA1\x69\x20\x6E\x67\x61\x79"}, // Start Game
+    {"\x53\x74\x61\x72\x74\x20\x47\x61\x6D\x65\x20\x77\x69\x74\x68\x6F\x75\x74\x20\x43\x75\x73\x74\x6F\x6D\x20\x43\x6F\x6E\x66\x69\x67\x75\x72\x61\x74\x69\x6F\x6E", "\x43\x68\xC6\xA1\x69\x20\x6B\x68\xC3\xB4\x6E\x67\x20\x64\xC3\xB9\x6E\x67\x20\x63\xE1\xBA\xA5\x75\x20\x68\xC3\xAC\x6E\x68\x20\x72\x69\xC3\xAA\x6E\x67"}, // Start Game without Custom Configuration
+    {"\x4F\x70\x65\x6E\x20\x53\x61\x76\x65\x20\x44\x61\x74\x61\x20\x4C\x6F\x63\x61\x74\x69\x6F\x6E", "\x4D\xE1\xBB\x9F\x20\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x64\xE1\xBB\xAF\x20\x6C\x69\xE1\xBB\x87\x75\x20\x53\x61\x76\x65"}, // Open Save Data Location
+    {"\x4F\x70\x65\x6E\x20\x4D\x6F\x64\x20\x44\x61\x74\x61\x20\x4C\x6F\x63\x61\x74\x69\x6F\x6E", "\x4D\xE1\xBB\x9F\x20\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x63\x68\xE1\xBB\xA9\x61\x20\x4D\x6F\x64"}, // Open Mod Data Location
+    {"\x4F\x70\x65\x6E\x20\x54\x72\x61\x6E\x73\x66\x65\x72\x61\x62\x6C\x65\x20\x50\x69\x70\x65\x6C\x69\x6E\x65\x20\x43\x61\x63\x68\x65", "\x4D\xE1\xBB\x9F\x20\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x53\x68\x61\x64\x65\x72\x20\x43\x61\x63\x68\x65"}, // Open Transferable Pipeline Cache
+    {"\x50\x72\x65\x70\x61\x72\x65\x20\x73\x68\x61\x64\x65\x72\x73\x20\x28\x77\x61\x72\x6D\x2D\x75\x70\x29", "\x43\x68\x75\xE1\xBA\xA9\x6E\x20\x62\xE1\xBB\x8B\x20\x74\x72\xC6\xB0\xE1\xBB\x9B\x63\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x20\x28\x63\x68\xE1\xBB\x89\x20\x63\xE1\xBA\xA7\x6E\x20\x31\x20\x6C\xE1\xBA\xA7\x6E\x29"}, // Prepare shaders (warm-up)
+    {"\x52\x65\x62\x75\x69\x6C\x64\x20\x73\x68\x61\x64\x65\x72\x20\x77\x61\x72\x6D\x2D\x75\x70", "\x54\xE1\xBA\xA1\x6F\x20\x6C\xE1\xBA\xA1\x69\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x20\x77\x61\x72\x6D\x2D\x75\x70"}, // Rebuild shader warm-up
+    {"\x44\x65\x6C\x65\x74\x65\x20\x73\x68\x61\x64\x65\x72\x20\x77\x61\x72\x6D\x2D\x75\x70", "\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x20\x77\x61\x72\x6D\x2D\x75\x70"}, // Delete shader warm-up
+    {"\x4C\x69\x6E\x6B\x20\x74\x6F\x20\x52\x79\x75\x6A\x69\x6E\x78", "\x4C\x69\xC3\xAA\x6E\x20\x6B\xE1\xBA\xBF\x74\x20\x64\xE1\xBB\xAF\x20\x6C\x69\xE1\xBB\x87\x75\x20\x76\xE1\xBB\x9B\x69\x20\x52\x79\x75\x6A\x69\x6E\x78"}, // Link to Ryujinx
+    {"\x52\x65\x6D\x6F\x76\x65", "\x47\xE1\xBB\xA1\x20\x62\xE1\xBB\x8F"}, // Remove
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x49\x6E\x73\x74\x61\x6C\x6C\x65\x64\x20\x55\x70\x64\x61\x74\x65", "\x47\xE1\xBB\xA1\x20\x62\xE1\xBA\xA3\x6E\x20\x63\xE1\xBA\xAD\x70\x20\x6E\x68\xE1\xBA\xAD\x74\x20\xC4\x91\xC3\xA3\x20\x63\xC3\xA0\x69"}, // Remove Installed Update
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x41\x6C\x6C\x20\x49\x6E\x73\x74\x61\x6C\x6C\x65\x64\x20\x44\x4C\x43", "\x47\xE1\xBB\xA1\x20\x74\x6F\xC3\xA0\x6E\x20\x62\xE1\xBB\x99\x20\x44\x4C\x43\x20\xC4\x91\xC3\xA3\x20\x63\xC3\xA0\x69"}, // Remove All Installed DLC
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x43\x75\x73\x74\x6F\x6D\x20\x43\x6F\x6E\x66\x69\x67\x75\x72\x61\x74\x69\x6F\x6E", "\x58\x6F\xC3\xA1\x20\x63\xE1\xBA\xA5\x75\x20\x68\xC3\xAC\x6E\x68\x20\x72\x69\xC3\xAA\x6E\x67\x20\x63\xE1\xBB\xA7\x61\x20\x47\x61\x6D\x65"}, // Remove Custom Configuration
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x43\x61\x63\x68\x65\x20\x53\x74\x6F\x72\x61\x67\x65", "\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\x6E\x68\xE1\xBB\x9B\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x43\x61\x63\x68\x65"}, // Remove Cache Storage
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x4F\x70\x65\x6E\x47\x4C\x20\x50\x69\x70\x65\x6C\x69\x6E\x65\x20\x43\x61\x63\x68\x65", "\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x4F\x70\x65\x6E\x47\x4C\x20\x50\x69\x70\x65\x6C\x69\x6E\x65"}, // Remove OpenGL Pipeline Cache
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x56\x75\x6C\x6B\x61\x6E\x20\x50\x69\x70\x65\x6C\x69\x6E\x65\x20\x43\x61\x63\x68\x65", "\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x56\x75\x6C\x6B\x61\x6E\x20\x50\x69\x70\x65\x6C\x69\x6E\x65"}, // Remove Vulkan Pipeline Cache
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x41\x6C\x6C\x20\x50\x69\x70\x65\x6C\x69\x6E\x65\x20\x43\x61\x63\x68\x65\x73", "\x58\x6F\xC3\xA1\x20\x74\x6F\xC3\xA0\x6E\x20\x62\xE1\xBB\x99\x20\x50\x69\x70\x65\x6C\x69\x6E\x65\x20\x43\x61\x63\x68\x65\x73"}, // Remove All Pipeline Caches
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x41\x6C\x6C\x20\x49\x6E\x73\x74\x61\x6C\x6C\x65\x64\x20\x43\x6F\x6E\x74\x65\x6E\x74\x73", "\x47\xE1\xBB\xA1\x20\x74\x6F\xC3\xA0\x6E\x20\x62\xE1\xBB\x99\x20\x6E\xE1\xBB\x99\x69\x20\x64\x75\x6E\x67\x20\xC4\x91\xC3\xA3\x20\x63\xC3\xA0\x69"}, // Remove All Installed Contents
+    {"\x4D\x61\x6E\x61\x67\x65\x20\x50\x6C\x61\x79\x20\x54\x69\x6D\x65", "\x51\x75\xE1\xBA\xA3\x6E\x20\x6C\xC3\xBD\x20\x67\x69\xE1\xBB\x9D\x20\x63\x68\xC6\xA1\x69"}, // Manage Play Time
+    {"\x45\x64\x69\x74\x20\x50\x6C\x61\x79\x20\x54\x69\x6D\x65\x20\x44\x61\x74\x61", "\x43\x68\xE1\xBB\x89\x6E\x68\x20\x73\xE1\xBB\xAD\x61\x20\x74\x68\xE1\xBB\x9D\x69\x20\x67\x69\x61\x6E\x20\x63\x68\xC6\xA1\x69"}, // Edit Play Time Data
+    {"\x52\x65\x6D\x6F\x76\x65\x20\x50\x6C\x61\x79\x20\x54\x69\x6D\x65\x20\x44\x61\x74\x61", "\x58\x6F\xC3\xA1\x20\x74\x68\xE1\xBB\x9D\x69\x20\x67\x69\x61\x6E\x20\x63\x68\xC6\xA1\x69"}, // Remove Play Time Data
+    {"\x44\x75\x6D\x70\x20\x4E\x55\x50\x2E\x2E\x2E", "\x54\x72\xC3\xAD\x63\x68\x20\x78\x75\xE1\xBA\xA5\x74\x20\x67\xC3\xB3\x69\x20\x4E\x55\x50\x2E\x2E\x2E"}, // Dump NUP...
+    {"\x44\x75\x6D\x70\x20\x52\x6F\x6D\x46\x53", "\x54\x72\xC3\xAD\x63\x68\x20\x78\x75\xE1\xBA\xA5\x74\x20\x52\x6F\x6D\x46\x53"}, // Dump RomFS
+    {"\x44\x75\x6D\x70\x20\x52\x6F\x6D\x46\x53\x20\x74\x6F\x20\x53\x44\x4D\x43", "\x54\x72\xC3\xAD\x63\x68\x20\x78\x75\xE1\xBA\xA5\x74\x20\x52\x6F\x6D\x46\x53\x20\x76\xC3\xA0\x6F\x20\x74\x68\xE1\xBA\xBB\x20\x6E\x68\xE1\xBB\x9B\x20\x53\x44\x4D\x43"}, // Dump RomFS to SDMC
+    {"\x56\x65\x72\x69\x66\x79\x20\x49\x6E\x74\x65\x67\x72\x69\x74\x79", "\x4B\x69\xE1\xBB\x83\x6D\x20\x74\x72\x61\x20\x74\x6F\xC3\xA0\x6E\x20\x76\xE1\xBA\xB9\x6E\x20\x66\x69\x6C\x65"}, // Verify Integrity
+    {"\x43\x6F\x70\x79\x20\x54\x69\x74\x6C\x65\x20\x49\x44\x20\x74\x6F\x20\x43\x6C\x69\x70\x62\x6F\x61\x72\x64", "\x53\x61\x6F\x20\x63\x68\xC3\xA9\x70\x20\x54\x69\x74\x6C\x65\x20\x49\x44"}, // Copy Title ID to Clipboard
+    {"\x43\x6F\x6E\x76\x65\x72\x74\x20\x74\x6F\x20\x4E\x55\x50\x2E\x2E\x2E", "\x43\x68\x75\x79\xE1\xBB\x83\x6E\x20\xC4\x91\xE1\xBB\x95\x69\x20\x73\x61\x6E\x67\x20\x4E\x55\x50\x2E\x2E\x2E"}, // Convert to NUP...
+    {"\x43\x72\x65\x61\x74\x65\x20\x53\x68\x6F\x72\x74\x63\x75\x74", "\x54\xE1\xBA\xA1\x6F\x20\x6C\xE1\xBB\x91\x69\x20\x74\xE1\xBA\xAF\x74\x20\x28\x53\x68\x6F\x72\x74\x63\x75\x74\x29"}, // Create Shortcut
+    {"\x43\x72\x65\x61\x74\x65\x20\x26\x53\x68\x6F\x72\x74\x63\x75\x74", "\x54\xE1\xBA\xA1\x6F\x20\x26\x6C\xE1\xBB\x91\x69\x20\x74\xE1\xBA\xAF\x74\x20\x28\x53\x68\x6F\x72\x74\x63\x75\x74\x29"}, // Create &Shortcut
+    {"\x41\x64\x64\x20\x74\x6F\x20\x44\x65\x73\x6B\x74\x6F\x70", "\x54\xE1\xBA\xA1\x6F\x20\x6C\xE1\xBB\x91\x69\x20\x74\xE1\xBA\xAF\x74\x20\x72\x61\x20\x4D\xC3\xA0\x6E\x20\x68\xC3\xAC\x6E\x68\x20\x63\x68\xC3\xAD\x6E\x68"}, // Add to Desktop
+    {"\x41\x64\x64\x20\x74\x6F\x20\x41\x70\x70\x6C\x69\x63\x61\x74\x69\x6F\x6E\x73\x20\x4D\x65\x6E\x75", "\x54\x68\xC3\xAA\x6D\x20\x76\xC3\xA0\x6F\x20\x6D\x65\x6E\x75\x20\xE1\xBB\xA9\x6E\x67\x20\x64\xE1\xBB\xA5\x6E\x67"}, // Add to Applications Menu
+    {"\x45\x64\x69\x74\x20\x4E\x55\x50\x20\x4D\x65\x74\x61\x64\x61\x74\x61\x2E\x2E\x2E", "\x43\x68\xE1\xBB\x89\x6E\x68\x20\x73\xE1\xBB\xAD\x61\x20\x74\x68\xC3\xB4\x6E\x67\x20\x74\x69\x6E\x20\x4E\x55\x50\x2E\x2E\x2E"}, // Edit NUP Metadata...
+    {"\x43\x6F\x6E\x66\x69\x67\x75\x72\x65\x20\x47\x61\x6D\x65", "\x43\xE1\xBA\xA5\x75\x20\x68\xC3\xAC\x6E\x68\x20\x47\x61\x6D\x65"}, // Configure Game
+    {"\x50\x72\x6F\x70\x65\x72\x74\x69\x65\x73", "\x54\x68\x75\xE1\xBB\x99\x63\x20\x74\xC3\xAD\x6E\x68\x20\x47\x61\x6D\x65"}, // Properties
     {"\x47\x65\x6E\x65\x72\x61\x6C", "\x43\xC3\xA0\x69\x20\xC4\x91\xE1\xBA\xB7\x74\x20\x63\x68\x75\x6E\x67"}, // General
     {"\x53\x79\x73\x74\x65\x6D", "\x48\xE1\xBB\x87\x20\x74\x68\xE1\xBB\x91\x6E\x67"}, // System
     {"\x43\x50\x55", "\x42\xE1\xBB\x99\x20\x78\xE1\xBB\xAD\x20\x6C\xC3\xBD\x20\x28\x43\x50\x55\x29"}, // CPU
@@ -262,7 +289,45 @@ static const TranslationEntry s_dict[] = {
     {"\x48\x65\x6C\x70", "\x54\x72\xE1\xBB\xA3\x20\x67\x69\xC3\xBA\x70"}, // Help
     {"\x52\x65\x64\x75\x63\x65\x20\x52\x41\x4D\x20\x75\x73\x61\x67\x65", "\x47\x69\xE1\xBA\xA3\x69\x20\x70\x68\xC3\xB3\x6E\x67\x20\x52\x41\x4D"}, // Reduce RAM usage
     {"\x44\x65\x6C\x65\x74\x65\x20\x53\x68\x61\x64\x65\x72\x20\x43\x61\x63\x68\x65", "\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72"}, // Delete Shader Cache
+    {"\x44\x65\x6C\x65\x74\x65\x20\x53\x68\x61\x64\x65\x72\x20\x43\x61\x63\x68\x65\x2E\x2E\x2E", "\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x2E\x2E\x2E"}, // Delete Shader Cache...
+    {"\x26\x44\x65\x6C\x65\x74\x65\x20\x53\x68\x61\x64\x65\x72\x20\x43\x61\x63\x68\x65\x2E\x2E\x2E", "\x26\x58\x6F\xC3\xA1\x20\x62\xE1\xBB\x99\x20\xC4\x91\xE1\xBB\x87\x6D\x20\x53\x68\x61\x64\x65\x72\x2E\x2E\x2E"}, // &Delete Shader Cache...
     {"\x45\x78\x70\x6F\x72\x74\x20\x4C\x6F\x67", "\x58\x75\xE1\xBA\xA5\x74\x20\x66\x69\x6C\x65\x20\x4C\x6F\x67"}, // Export Log
+    {"\x45\x78\x70\x6F\x72\x74\x20\x4C\x6F\x67\x2E\x2E\x2E", "\x58\x75\xE1\xBA\xA5\x74\x20\x66\x69\x6C\x65\x20\x4C\x6F\x67\x2E\x2E\x2E"}, // Export Log...
+    {"\x26\x45\x78\x70\x6F\x72\x74\x20\x4C\x6F\x67\x2E\x2E\x2E", "\x26\x58\x75\xE1\xBA\xA5\x74\x20\x66\x69\x6C\x65\x20\x4C\x6F\x67\x2E\x2E\x2E"}, // &Export Log...
+    {"\x57\x68\x61\x74\x27\x73\x20\x4E\x65\x77", "\x43\xC3\xB3\x20\x67\xC3\xAC\x20\x6D\xE1\xBB\x9B\x69"}, // What's New
+    {"\x57\x68\x61\x74\x27\x73\x20\x26\x4E\x65\x77", "\x43\xC3\xB3\x20\x67\xC3\xAC\x20\x26\x6D\xE1\xBB\x9B\x69"}, // What's &New
+    {"\x43\x68\x65\x63\x6B\x20\x66\x6F\x72\x20\x55\x70\x64\x61\x74\x65\x73", "\x4B\x69\xE1\xBB\x83\x6D\x20\x74\x72\x61\x20\x62\xE1\xBA\xA3\x6E\x20\x63\xE1\xBA\xAD\x70\x20\x6E\x68\xE1\xBA\xAD\x74"}, // Check for Updates
+    {"\x55\x70\x64\x61\x74\x65", "\x43\xE1\xBA\xAD\x70\x20\x6E\x68\xE1\xBA\xAD\x74"}, // Update
+    {"\x56\x69\x65\x77\x20\x6F\x6E\x20\x47\x69\x74\x48\x75\x62", "\x58\x65\x6D\x20\x74\x72\xC3\xAA\x6E\x20\x47\x69\x74\x48\x75\x62"}, // View on GitHub
+    {"\x57\x6F\x75\x6C\x64\x20\x79\x6F\x75\x20\x6C\x69\x6B\x65\x20\x74\x6F\x20\x64\x6F\x77\x6E\x6C\x6F\x61\x64\x20\x74\x68\x69\x73\x20\x75\x70\x64\x61\x74\x65\x3F", "\x42\xE1\xBA\xA1\x6E\x20\x63\xC3\xB3\x20\x6D\x75\xE1\xBB\x91\x6E\x20\x74\xE1\xBA\xA3\x69\x20\x62\xE1\xBA\xA3\x6E\x20\x63\xE1\xBA\xAD\x70\x20\x6E\x68\xE1\xBA\xAD\x74\x20\x6E\xC3\xA0\x79\x20\x6B\x68\xC3\xB4\x6E\x67\x3F"}, // Would you like to download this update?
+    {"\x49\x6E\x73\x74\x61\x6C\x6C", "\x43\xC3\xA0\x69\x20\xC4\x91\xE1\xBA\xB7\x74"}, // Install
+    {"\x52\x65\x6D\x69\x6E\x64\x20\x4D\x65\x20\x4C\x61\x74\x65\x72", "\x4E\x68\xE1\xBA\xAF\x63\x20\x74\xC3\xB4\x69\x20\x73\x61\x75"}, // Remind Me Later
+    {"\x53\x6B\x69\x70\x20\x54\x68\x69\x73\x20\x56\x65\x72\x73\x69\x6F\x6E", "\x42\xE1\xBB\x8F\x20\x71\x75\x61\x20\x70\x68\x69\xC3\xAA\x6E\x20\x62\xE1\xBA\xA3\x6E\x20\x6E\xC3\xA0\x79"}, // Skip This Version
+    {"\x41\x62\x6F\x75\x74\x20\x46\x72\x69\x74\x63\x68\x69\x69", "\x47\x69\xE1\xBB\x9B\x69\x20\x74\x68\x69\xE1\xBB\x87\x75\x20\x59\x6E\x67\x63\x68\x69\x69\x2D\x58\x33\x44"}, // About Fritchii
+    {"\x41\x62\x6F\x75\x74\x20\x59\x6E\x67\x63\x68\x69\x69\x2D\x58\x33\x44", "\x47\x69\xE1\xBB\x9B\x69\x20\x74\x68\x69\xE1\xBB\x87\x75\x20\x59\x6E\x67\x63\x68\x69\x69\x2D\x58\x33\x44"}, // About Yngchii-X3D
+    {"\x41\x62\x6F\x75\x74", "\x47\x69\xE1\xBB\x9B\x69\x20\x74\x68\x69\xE1\xBB\x87\x75"}, // About
+    {"\x44\x65\x70\x65\x6E\x64\x65\x6E\x63\x69\x65\x73", "\x54\x68\xC3\xA0\x6E\x68\x20\x70\x68\xE1\xBA\xA7\x6E\x20\x70\x68\xE1\xBB\xA5\x20\x74\x68\x75\xE1\xBB\x99\x63"}, // Dependencies
+    {"\x4C\x69\x63\x68\x69\x69\x20\x44\x65\x70\x65\x6E\x64\x65\x6E\x63\x69\x65\x73", "\x59\x6E\x67\x63\x68\x69\x69\x2D\x58\x33\x44\x20\x44\x65\x70\x65\x6E\x64\x65\x6E\x63\x69\x65\x73"}, // Lichii Dependencies
+    {"\x46\x72\x69\x74\x63\x68\x69\x69\x20\x26\x44\x69\x73\x63\x6F\x72\x64", "\x59\x6E\x67\x63\x68\x69\x69\x20\x26\x44\x69\x73\x63\x6F\x72\x64"}, // Fritchii &Discord
+    {"\x44\x26\x6F\x6E\x61\x74\x65", "\xE1\xBB\xA6\x6E\x67\x20\x26\x68\xE1\xBB\x99"}, // D&onate
+    {"\x4F\x70\x65\x6E\x20\x26\x52\x65\x63\x65\x6E\x74", "\x4D\xE1\xBB\x9F\x20\x67\xE1\xBA\xA7\x6E\x20\x26\xC4\x91\xC3\xA2\x79"}, // Open &Recent
+    {"\x4F\x70\x65\x6E\x20\x26\x46\x6F\x6C\x64\x65\x72", "\x4D\xE1\xBB\x9F\x20\x26\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63"}, // Open &Folder
+    {"\x47\x61\x6D\x65\x20\x26\x4C\x69\x73\x74", "\x44\x61\x6E\x68\x20\x73\xC3\xA1\x63\x68\x20\x26\x47\x61\x6D\x65"}, // Game &List
+    {"\x26\x49\x63\x6F\x6E\x20\x53\x69\x7A\x65", "\x4B\xC3\xAD\x63\x68\x20\x74\x68\xC6\xB0\xE1\xBB\x9B\x63\x20\x26\x49\x63\x6F\x6E"}, // &Icon Size
+    {"\x26\x57\x69\x6E\x64\x6F\x77\x20\x53\x69\x7A\x65", "\x4B\xC3\xAD\x63\x68\x20\x74\x68\xC6\xB0\xE1\xBB\x9B\x63\x20\x26\x63\xE1\xBB\xAD\x61\x20\x73\xE1\xBB\x95"}, // &Window Size
+    {"\x26\x4F\x70\x65\x6E\x20\x47\x61\x6D\x65\x2E\x2E\x2E", "\x26\x4D\xE1\xBB\x9F\x20\x47\x61\x6D\x65\x2E\x2E\x2E"}, // &Open Game...
+    {"\x4F\x70\x65\x6E\x20\x26\x45\x78\x74\x72\x61\x63\x74\x65\x64\x20\x47\x61\x6D\x65\x2E\x2E\x2E", "\x4D\xE1\xBB\x9F\x20\x47\x61\x6D\x65\x20\xC4\x91\xC3\xA3\x20\x26\x67\x69\xE1\xBA\xA3\x69\x20\x6E\xC3\xA9\x6E\x2E\x2E\x2E"}, // Open &Extracted Game...
+    {"\x26\x49\x6E\x73\x74\x61\x6C\x6C\x20\x55\x70\x64\x61\x74\x65\x20\x6F\x72\x20\x44\x4C\x43\x2E\x2E\x2E", "\x26\x43\xC3\xA0\x69\x20\xC4\x91\xE1\xBA\xB7\x74\x20\x42\xE1\xBA\xA3\x6E\x20\x63\xE1\xBA\xAD\x70\x20\x6E\x68\xE1\xBA\xAD\x74\x20\x68\x6F\xE1\xBA\xB7\x63\x20\x44\x4C\x43\x2E\x2E\x2E"}, // &Install Update or DLC...
+    {"\x26\x53\x65\x74\x74\x69\x6E\x67\x73\x2E\x2E\x2E", "\x26\x43\xC3\xA0\x69\x20\xC4\x91\xE1\xBA\xB7\x74\x2E\x2E\x2E"}, // &Settings...
+    {"\x47\x61\x6D\x65\x20\x26\x53\x65\x74\x74\x69\x6E\x67\x73\x2E\x2E\x2E", "\x43\xC3\xA0\x69\x20\xC4\x91\xE1\xBA\xB7\x74\x20\x26\x47\x61\x6D\x65\x2E\x2E\x2E"}, // Game &Settings...
+    {"\x26\x44\x61\x74\x61", "\x44\xE1\xBB\xAF\x20\x26\x6C\x69\xE1\xBB\x87\x75\x20\x28\x44\x61\x74\x61\x29"}, // &Data
+    {"\x26\x4E\x41\x4E\x44", "\x42\xE1\xBB\x99\x20\x6E\x68\xE1\xBB\x9B\x20\x26\x4E\x41\x4E\x44"}, // &NAND
+    {"\x26\x53\x44\x20\x43\x61\x72\x64", "\x54\x68\xE1\xBA\xBB\x20\x26\x6E\x68\xE1\xBB\x9B\x20\x53\x44"}, // &SD Card
+    {"\x26\x4D\x6F\x64\x73", "\x54\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x26\x4D\x6F\x64"}, // &Mods
+    {"\x4F\x70\x65\x6E\x20\x26\x4C\x6F\x67\x20\x46\x6F\x6C\x64\x65\x72", "\x4D\xE1\xBB\x9F\x20\x74\x68\xC6\xB0\x20\x6D\xE1\xBB\xA5\x63\x20\x26\x4C\x6F\x67"}, // Open &Log Folder
+    {"\x26\x4C\x69\x73\x74", "\x44\x61\x6E\x68\x20\x26\x73\xC3\xA1\x63\x68"}, // &List
+    {"\x26\x47\x72\x69\x64", "\x4C\x26\xC6\xB0\xE1\xBB\x9B\x69"}, // &Grid
+    {"\x26\x43\x61\x72\x6F\x75\x73\x65\x6C", "\x26\x42\xC4\x83\x6E\x67\x20\x63\x68\x75\x79\xE1\xBB\x81\x6E"}, // &Carousel
 };
 
 static const size_t s_dict_size = sizeof(s_dict) / sizeof(s_dict[0]);
@@ -283,10 +348,6 @@ static const char* TranslateTextBidirectional(const char* text, int is_vn) {
         }
     }
     return NULL;
-}
-
-static const char* LookupVietnamese(const char* en) {
-    return TranslateTextBidirectional(en, 1);
 }
 
 // ==============================================================================
@@ -310,9 +371,9 @@ static pfn_fromLatin1 s_orig_fromLatin1 = NULL;
 
 static void* Hook_translate(void* ret, const char* context, const char* sourceText, const char* disambiguation, int n) {
     if (!s_is_in_game && g_lang_vn && sourceText) {
-        const char* vn = LookupVietnamese(sourceText);
+        const char* vn = TranslateTextBidirectional(sourceText, 1);
         if (vn) {
-            return s_orig_translate(ret, context, vn, disambiguation, n);
+            sourceText = vn;
         }
     }
     return s_orig_translate(ret, context, sourceText, disambiguation, n);
@@ -320,9 +381,9 @@ static void* Hook_translate(void* ret, const char* context, const char* sourceTe
 
 static void* Hook_tr(void* ret, const void* metaObj, const char* sourceText, const char* disambiguation, int n) {
     if (!s_is_in_game && g_lang_vn && sourceText) {
-        const char* vn = LookupVietnamese(sourceText);
+        const char* vn = TranslateTextBidirectional(sourceText, 1);
         if (vn) {
-            return s_orig_tr(ret, metaObj, vn, disambiguation, n);
+            sourceText = vn;
         }
     }
     return s_orig_tr(ret, metaObj, sourceText, disambiguation, n);
@@ -330,15 +391,15 @@ static void* Hook_tr(void* ret, const void* metaObj, const char* sourceText, con
 
 static void* Hook_fromUtf8(void* ret, const QByteArrayView_C* view) {
     QByteArrayView_C mod_view;
-    if (!s_is_in_game && g_lang_vn && view && view->data && view->size > 0 && view->size < 128) {
-        char buf[128];
-        memcpy(buf, view->data, (size_t)view->size);
+    if (!s_is_in_game && g_lang_vn && view && view->data && view->size > 0 && view->size < 256) {
+        char buf[256];
+        memcpy(buf, view->data, view->size);
         buf[view->size] = '\0';
-        const char* vn = LookupVietnamese(buf);
+        const char* vn = TranslateTextBidirectional(buf, 1);
         if (vn) {
             mod_view.data = vn;
             mod_view.size = (int64_t)strlen(vn);
-            return s_orig_fromUtf8(ret, &mod_view);
+            view = &mod_view;
         }
     }
     return s_orig_fromUtf8(ret, view);
@@ -346,11 +407,11 @@ static void* Hook_fromUtf8(void* ret, const QByteArrayView_C* view) {
 
 static void* Hook_fromLatin1(void* ret, const QByteArrayView_C* view) {
     QByteArrayView_C mod_view;
-    if (!s_is_in_game && g_lang_vn && view && view->data && view->size > 0 && view->size < 128 && s_orig_fromUtf8) {
-        char buf[128];
-        memcpy(buf, view->data, (size_t)view->size);
+    if (!s_is_in_game && g_lang_vn && view && view->data && view->size > 0 && view->size < 256 && s_orig_fromUtf8) {
+        char buf[256];
+        memcpy(buf, view->data, view->size);
         buf[view->size] = '\0';
-        const char* vn = LookupVietnamese(buf);
+        const char* vn = TranslateTextBidirectional(buf, 1);
         if (vn) {
             mod_view.data = vn;
             mod_view.size = (int64_t)strlen(vn);
@@ -360,74 +421,90 @@ static void* Hook_fromLatin1(void* ret, const QByteArrayView_C* view) {
     return s_orig_fromLatin1(ret, view);
 }
 
-static void InstallQt6IATHooks(void) {
-    BYTE* pBase = (BYTE*)GetModuleHandleW(NULL);
-    if (!pBase) return;
+static void HookIAT(HMODULE hTargetModule, const char* targetDll, const char* funcName, void* newFunc, void** origFunc) {
+    if (!hTargetModule) return;
+    BYTE* base = (BYTE*)hTargetModule;
+    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return;
 
-    DWORD rva_translate  = 0x2886208;
-    DWORD rva_tr         = 0x2886200;
-    DWORD rva_fromUtf8   = 0x2885798;
-    DWORD rva_fromLatin1 = 0x2885758;
+    IMAGE_DATA_DIRECTORY* importDir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (importDir->Size == 0) return;
 
-    DWORD oldProt;
+    IMAGE_IMPORT_DESCRIPTOR* impDesc = (IMAGE_IMPORT_DESCRIPTOR*)(base + importDir->VirtualAddress);
+    for (; impDesc->Name != 0; impDesc++) {
+        char* name = (char*)(base + impDesc->Name);
+        if (_stricmp(name, targetDll) == 0) {
+            IMAGE_THUNK_DATA* origThunk = (IMAGE_THUNK_DATA*)(base + impDesc->OriginalFirstThunk);
+            IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)(base + impDesc->FirstThunk);
+            if (!impDesc->OriginalFirstThunk) origThunk = thunk;
 
-    void** pIAT_translate = (void**)(pBase + rva_translate);
-    if (VirtualProtect(pIAT_translate, sizeof(void*), PAGE_READWRITE, &oldProt)) {
-        s_orig_translate = (pfn_translate)*pIAT_translate;
-        *pIAT_translate = (void*)Hook_translate;
-        VirtualProtect(pIAT_translate, sizeof(void*), oldProt, &oldProt);
-    }
-
-    void** pIAT_tr = (void**)(pBase + rva_tr);
-    if (VirtualProtect(pIAT_tr, sizeof(void*), PAGE_READWRITE, &oldProt)) {
-        s_orig_tr = (pfn_tr)*pIAT_tr;
-        *pIAT_tr = (void*)Hook_tr;
-        VirtualProtect(pIAT_tr, sizeof(void*), oldProt, &oldProt);
-    }
-
-    void** pIAT_fromUtf8 = (void**)(pBase + rva_fromUtf8);
-    if (VirtualProtect(pIAT_fromUtf8, sizeof(void*), PAGE_READWRITE, &oldProt)) {
-        s_orig_fromUtf8 = (pfn_fromUtf8)*pIAT_fromUtf8;
-        *pIAT_fromUtf8 = (void*)Hook_fromUtf8;
-        VirtualProtect(pIAT_fromUtf8, sizeof(void*), oldProt, &oldProt);
-    }
-
-    void** pIAT_fromLatin1 = (void**)(pBase + rva_fromLatin1);
-    if (VirtualProtect(pIAT_fromLatin1, sizeof(void*), PAGE_READWRITE, &oldProt)) {
-        s_orig_fromLatin1 = (pfn_fromLatin1)*pIAT_fromLatin1;
-        *pIAT_fromLatin1 = (void*)Hook_fromLatin1;
-        VirtualProtect(pIAT_fromLatin1, sizeof(void*), oldProt, &oldProt);
-    }
-}
-
-static void TriggerQtRetranslate(void) {
-    HMODULE hQtCore = GetModuleHandleW(L"Qt6Core.dll");
-    if (!hQtCore) return;
-    typedef void* (*pfn_instance)(void);
-    typedef void (*pfn_qevent_ctor)(void* this_ptr, int type);
-    typedef void (*pfn_postEvent)(void* receiver, void* event, int priority);
-
-    pfn_instance pInstance = (pfn_instance)GetProcAddress(hQtCore, "?instance@QCoreApplication@@SAPEAV1@XZ");
-    pfn_qevent_ctor pEventCtor = (pfn_qevent_ctor)GetProcAddress(hQtCore, "??0QEvent@@QEAA@W4Type@0@@Z");
-    pfn_postEvent pPostEvent = (pfn_postEvent)GetProcAddress(hQtCore, "?postEvent@QCoreApplication@@SAXPEAVQObject@@PEAVQEvent@@H@Z");
-
-    if (pInstance && pEventCtor && pPostEvent) {
-        void* app = pInstance();
-        if (app) {
-            void* ev = malloc(32);
-            if (ev) {
-                memset(ev, 0, 32);
-                pEventCtor(ev, 89); // QEvent::LanguageChange = 89
-                pPostEvent(app, ev, 0);
+            for (; origThunk->u1.AddressOfData != 0; origThunk++, thunk++) {
+                if (!(origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)) {
+                    IMAGE_IMPORT_BY_NAME* impByName = (IMAGE_IMPORT_BY_NAME*)(base + origThunk->u1.AddressOfData);
+                    if (strcmp((char*)impByName->Name, funcName) == 0) {
+                        if (*origFunc == NULL) {
+                            *origFunc = (void*)thunk->u1.Function;
+                        }
+                        if ((void*)thunk->u1.Function != newFunc) {
+                            DWORD oldProtect;
+                            VirtualProtect(&thunk->u1.Function, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect);
+                            thunk->u1.Function = (ULONG_PTR)newFunc;
+                            VirtualProtect(&thunk->u1.Function, sizeof(void*), oldProtect, &oldProtect);
+                        }
+                        return;
+                    }
+                }
             }
         }
     }
 }
 
+static void InstallQt6IATHooks(void) {
+    HMODULE hExe = GetModuleHandleW(NULL);
+    if (!hExe) return;
+
+    // Qt6Core.dll string conversion & translation hooks
+    HookIAT(hExe, "Qt6Core.dll", "?translate@QCoreApplication@@SA?AVQString@@PEBD00H@Z", (void*)Hook_translate, (void**)&s_orig_translate);
+    HookIAT(hExe, "Qt6Core.dll", "?tr@QObject@@SA?AVQString@@PEBD0H@Z", (void*)Hook_tr, (void**)&s_orig_tr);
+    HookIAT(hExe, "Qt6Core.dll", "?fromUtf8@QString@@SA?AV1@V?$QBasicUtf8StringView@D@@@Z", (void*)Hook_fromUtf8, (void**)&s_orig_fromUtf8);
+    HookIAT(hExe, "Qt6Core.dll", "?fromLatin1@QString@@SA?AV1@V?$QBasicLatin1StringView@D@@@Z", (void*)Hook_fromLatin1, (void**)&s_orig_fromLatin1);
+}
+
 // ==============================================================================
-// 4. VERTICAL ON/OFF TOGGLE SWITCH (EN / VN) & LIVE Qt6 WIDGET TRANSLATOR
+// 4. DYNAMIC LIVE WIDGET & ACTION RE-TRANSLATION
 // ==============================================================================
-#define ID_LANG_BTN 9901
+static void TriggerQtRetranslate(void) {
+    if (s_is_in_game) return;
+    HMODULE hCore = GetModuleHandleW(L"Qt6Core.dll");
+    if (!hCore) return;
+
+    typedef void* (*pfn_app_instance)(void);
+    typedef void (*pfn_post_event)(void* receiver, void* event, int priority);
+
+    static pfn_app_instance s_app_inst = NULL;
+    static pfn_post_event s_post_event = NULL;
+
+    if (!s_app_inst) {
+        s_app_inst = (pfn_app_instance)GetProcAddress(hCore, "?instance@QCoreApplication@@SAPEAV1@XZ");
+        s_post_event = (pfn_post_event)GetProcAddress(hCore, "?postEvent@QCoreApplication@@SAXPEAVQObject@@PEAVQEvent@@H@Z");
+    }
+
+    if (s_app_inst && s_post_event) {
+        void* app = s_app_inst();
+        if (app) {
+            void* ev = malloc(64);
+            if (ev) {
+                memset(ev, 0, 64);
+                int* type_ptr = (int*)((char*)ev + sizeof(void*));
+                *type_ptr = 111; // QEvent::LanguageChange
+                s_post_event(app, ev, 0);
+            }
+        }
+    }
+}
+
 #define WM_YNGCHII_INIT_BTN (WM_APP + 0x55)
 #define TIMER_ID_YNGCHII 0x7788
 #define TIMER_ID_ANIM    0x7789
@@ -452,6 +529,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
 
     HMODULE hWidgets = GetModuleHandleW(L"Qt6Widgets.dll");
     HMODULE hCore = GetModuleHandleW(L"Qt6Core.dll");
+    HMODULE hGui = GetModuleHandleW(L"Qt6Gui.dll");
     if (!hWidgets || !hCore) {
         s_in_translation = 0;
         return;
@@ -471,6 +549,10 @@ static void TriggerLiveQtWidgetTranslation(void) {
     typedef void* (*pfn_tab_text)(void* this_ptr, void* ret_qstr, int index);
     typedef void (*pfn_tab_setText)(void* this_ptr, int index, const void* qstr_ptr);
 
+    typedef void* (*pfn_actions)(void* this_ptr, void* ret_qlist);
+    typedef void* (*pfn_act_text)(void* this_ptr, void* ret_qstr);
+    typedef void (*pfn_act_setText)(void* this_ptr, const void* qstr_ptr);
+
     static pfn_allWidgets s_pfn_allWidgets = NULL;
     static pfn_inherits s_pfn_inherits = NULL;
     static pfn_fromUtf8_str s_pfn_fromUtf8_str = NULL;
@@ -488,6 +570,10 @@ static void TriggerLiveQtWidgetTranslation(void) {
     static pfn_tab_count s_pfn_tab_count = NULL;
     static pfn_tab_text s_pfn_tab_text = NULL;
     static pfn_tab_setText s_pfn_tab_setText = NULL;
+
+    static pfn_actions s_pfn_actions = NULL;
+    static pfn_act_text s_pfn_act_text = NULL;
+    static pfn_act_setText s_pfn_act_setText = NULL;
 
     if (!s_pfn_allWidgets) {
         s_pfn_allWidgets = (pfn_allWidgets)GetProcAddress(hWidgets, "?allWidgets@QApplication@@SA?AV?$QList@PEAVQWidget@@@@XZ");
@@ -508,6 +594,12 @@ static void TriggerLiveQtWidgetTranslation(void) {
         s_pfn_tab_count = (pfn_tab_count)GetProcAddress(hWidgets, "?count@QTabBar@@QEBAHXZ");
         s_pfn_tab_text = (pfn_tab_text)GetProcAddress(hWidgets, "?tabText@QTabBar@@QEBA?AVQString@@H@Z");
         s_pfn_tab_setText = (pfn_tab_setText)GetProcAddress(hWidgets, "?setTabText@QTabBar@@QEAAXHAEBVQString@@@Z");
+
+        s_pfn_actions = (pfn_actions)GetProcAddress(hWidgets, "?actions@QWidget@@QEBA?AV?$QList@PEAVQAction@@@@XZ");
+        if (hGui) {
+            s_pfn_act_text = (pfn_act_text)GetProcAddress(hGui, "?text@QAction@@QEBA?AVQString@@XZ");
+            s_pfn_act_setText = (pfn_act_setText)GetProcAddress(hGui, "?setText@QAction@@QEAAXAEBVQString@@@Z");
+        }
     }
 
     if (!s_pfn_allWidgets || !s_pfn_inherits || !s_pfn_fromUtf8_str || !s_pfn_toUtf8 || !s_pfn_constData || !s_pfn_dtor) {
@@ -539,7 +631,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
             void* w = widget_list.ptr[i];
             if (!w) continue;
 
-            // 1. Handle QTabBar tabs (Settings / Game Settings dialog headers)
+            // 1. Handle QTabBar tabs
             if (s_pfn_tab_count && s_pfn_tab_text && s_pfn_tab_setText && s_pfn_inherits(w, "QTabBar")) {
                 int count = s_pfn_tab_count(w);
                 for (int t = 0; t < count; t++) {
@@ -563,7 +655,41 @@ static void TriggerLiveQtWidgetTranslation(void) {
                 continue;
             }
 
-            // 2. Handle Buttons, Labels, GroupBoxes
+            // 2. Handle QMenu and QWidget actions (Context Menu items)
+            if (s_pfn_actions && s_pfn_act_text && s_pfn_act_setText && s_pfn_inherits(w, "QMenu")) {
+                struct {
+                    void* d;
+                    void** ptr;
+                    int64_t size;
+                } act_list;
+                memset(&act_list, 0, sizeof(act_list));
+                s_pfn_actions(w, &act_list);
+                if (act_list.ptr && act_list.size > 0) {
+                    for (int64_t a = 0; a < act_list.size; a++) {
+                        void* act = act_list.ptr[a];
+                        if (!act) continue;
+                        char act_qstr[32] = {0};
+                        s_pfn_act_text(act, act_qstr);
+                        char act_qba[32] = {0};
+                        s_pfn_toUtf8(act_qstr, act_qba);
+                        const char* act_text = s_pfn_constData(act_qba);
+                        if (act_text && act_text[0] != '\0') {
+                            const char* act_target = TranslateTextBidirectional(act_text, g_lang_vn);
+                            if (act_target && strcmp(act_text, act_target) != 0) {
+                                char new_act_qstr[32] = {0};
+                                s_pfn_fromUtf8_str(new_act_qstr, act_target, -1);
+                                s_pfn_act_setText(act, new_act_qstr);
+                                s_pfn_dtor(new_act_qstr);
+                            }
+                        }
+                        s_pfn_dtor(act_qba);
+                        s_pfn_dtor(act_qstr);
+                    }
+                }
+                s_pfn_dtor(&act_list);
+            }
+
+            // 3. Handle Buttons, Labels, GroupBoxes
             pfn_get_text fn_get = NULL;
             pfn_set_text fn_set = NULL;
 
@@ -627,17 +753,16 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             int w = rc.right - rc.left;
             int h = rc.bottom - rc.top;
 
-            // Double-buffered painting to prevent any flicker when sliding
             HDC hdc = CreateCompatibleDC(hdcScreen);
             HBITMAP hbm = CreateCompatibleBitmap(hdcScreen, w, h);
             HGDIOBJ oldBm = SelectObject(hdc, hbm);
 
-            // 1. Clear outer background to match Fritchii sidebar RGB(12, 12, 14)
+            // Clear outer background
             HBRUSH sidebarBrush = CreateSolidBrush(RGB(12, 12, 14));
             FillRect(hdc, &rc, sidebarBrush);
             DeleteObject(sidebarBrush);
 
-            // 2. Draw vertical capsule track (Ranh gat doc)
+            // Track
             int is_vn_visual = (s_knob_pos >= 0.5f) ? 1 : 0;
             COLORREF trackBg = is_vn_visual ? RGB(31, 24, 54) : RGB(24, 24, 28);
             COLORREF trackBorder = is_vn_visual ? RGB(109, 82, 205) : RGB(56, 56, 64);
@@ -656,7 +781,7 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             DeleteObject(trackBrush);
             DeleteObject(trackPen);
 
-            // 3. Draw background slot labels ("EN" on top half, "VN" on bottom half)
+            // Labels
             SetBkMode(hdc, TRANSPARENT);
             int fontSize = (w * 36) / 100;
             if (fontSize < 10) fontSize = 10;
@@ -675,7 +800,7 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             DrawTextW(hdc, L"EN", -1, &rcTop, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             DrawTextW(hdc, L"VN", -1, &rcBot, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-            // 4. Draw sliding thumb/knob (Num gat len / xuong)
+            // Sliding knob
             int pad = 3;
             int knobW = w - pad * 2;
             int knobH = (h - pad * 2) / 2;
@@ -699,17 +824,17 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             DeleteObject(knobBrush);
             DeleteObject(knobPen);
 
-            // 5. Draw active label on the sliding knob
+            // Active text
             SelectObject(hdc, hFontKnob);
             SetTextColor(hdc, RGB(255, 255, 255));
             RECT rcKnob = {pad, knobY, pad + knobW, knobY + knobH};
             DrawTextW(hdc, is_vn_visual ? L"VN" : L"EN", -1, &rcKnob, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
+            BitBlt(hdcScreen, 0, 0, w, h, hdc, 0, 0, SRCCOPY);
+
             SelectObject(hdc, oldFont);
             DeleteObject(hFontBg);
             DeleteObject(hFontKnob);
-
-            BitBlt(hdcScreen, 0, 0, w, h, hdc, 0, 0, SRCCOPY);
             SelectObject(hdc, oldBm);
             DeleteObject(hbm);
             DeleteDC(hdc);
@@ -723,29 +848,26 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             s_drag_moved = 0;
             s_drag_start_y = GET_Y_LPARAM(lParam);
             s_drag_start_pos = s_knob_pos;
-            KillTimer(hWnd, TIMER_ID_ANIM);
             return 0;
         }
         case WM_MOUSEMOVE: {
             if (s_is_dragging) {
+                int curY = GET_Y_LPARAM(lParam);
+                int deltaY = curY - s_drag_start_y;
+                if (abs(deltaY) > 3) s_drag_moved = 1;
+
                 RECT rc;
                 GetClientRect(hWnd, &rc);
                 int h = rc.bottom - rc.top;
                 int pad = 3;
                 int knobH = (h - pad * 2) / 2;
                 int travel = (h - pad * 2) - knobH;
-                if (travel < 1) travel = 1;
-
-                int curY = GET_Y_LPARAM(lParam);
-                int dy = curY - s_drag_start_y;
-                if (dy < -2 || dy > 2) {
-                    s_drag_moved = 1;
+                if (travel > 0) {
+                    float new_pos = s_drag_start_pos + ((float)deltaY / (float)travel);
+                    if (new_pos < 0.0f) new_pos = 0.0f;
+                    if (new_pos > 1.0f) new_pos = 1.0f;
+                    s_knob_pos = new_pos;
                 }
-
-                float new_pos = s_drag_start_pos + (float)dy / (float)travel;
-                if (new_pos < 0.0f) new_pos = 0.0f;
-                if (new_pos > 1.0f) new_pos = 1.0f;
-                s_knob_pos = new_pos;
 
                 int target_vn = (s_knob_pos >= 0.5f) ? 1 : 0;
                 if (target_vn != g_lang_vn) {
@@ -767,7 +889,6 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 if (s_drag_moved) {
                     target_vn = (s_knob_pos >= 0.5f) ? 1 : 0;
                 } else {
-                    // If clicked on top half -> EN (0), bottom half -> VN (1), or toggle if clicking active side
                     RECT rc;
                     GetClientRect(hWnd, &rc);
                     int h = rc.bottom - rc.top;
@@ -782,9 +903,9 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         case WM_MOUSEWHEEL: {
             short delta = GET_WHEEL_DELTA_WPARAM(wParam);
             if (delta > 0) {
-                ApplyLanguageState(hWnd, 0); // Wheel Up -> EN
+                ApplyLanguageState(hWnd, 0); // Up -> EN
             } else if (delta < 0) {
-                ApplyLanguageState(hWnd, 1); // Wheel Down -> VN
+                ApplyLanguageState(hWnd, 1); // Down -> VN
             }
             return 0;
         }
@@ -820,12 +941,12 @@ static void GetToggleSwitchGeometry(HWND hMainWnd, int* out_x, int* out_y, int* 
     UINT dpi = pGetDpi ? pGetDpi(hMainWnd) : 96;
     if (!dpi) dpi = 96;
 
-    // Sidebar center is at X = (24 * dpi) / 96 (sidebar is 48px wide)
-    int centerX = (24 * (int)dpi) / 96;
+    // Horizontally center with sidebar buttons at X = 28 (x = 15, w = 26 at 96 DPI)
+    int centerX = (28 * (int)dpi) / 96;
     int bw = (26 * (int)dpi) / 96;
     int bh = (52 * (int)dpi) / 96;
-    int bx = centerX - (bw / 2); // 24 - 13 = 11 at 96 DPI
-    int by = (200 * (int)dpi) / 96; // Y = 200 at 96 DPI
+    int bx = centerX - (bw / 2);
+    int by = (200 * (int)dpi) / 96;
 
     *out_x = bx;
     *out_y = by;
@@ -852,31 +973,30 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             SetWindowLongPtrW(hWnd, GWL_STYLE, style | WS_CLIPCHILDREN);
         }
 
-        s_knob_pos = g_lang_vn ? 1.0f : 0.0f;
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = LangBtnWndProc;
+        wc.hInstance = g_hInst;
+        wc.lpszClassName = L"YngchiiLangSwitch";
+        wc.hCursor = LoadCursor(NULL, IDC_HAND);
+        RegisterClassExW(&wc);
 
         int bx, by, bw, bh;
         GetToggleSwitchGeometry(hWnd, &bx, &by, &bw, &bh);
 
-        WNDCLASSEXW wc;
-        memset(&wc, 0, sizeof(wc));
-        wc.cbSize = sizeof(WNDCLASSEXW);
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc = LangBtnWndProc;
-        wc.hInstance = g_hInst ? g_hInst : GetModuleHandleW(NULL);
-        wc.hCursor = LoadCursor(NULL, IDC_HAND);
-        wc.lpszClassName = L"YngchiiLangSwitch";
-        RegisterClassExW(&wc);
+        s_knob_pos = g_lang_vn ? 1.0f : 0.0f;
 
         if (!s_hwndLangBtn || !IsWindow(s_hwndLangBtn)) {
             s_hwndLangBtn = CreateWindowExW(
                 0,
                 L"YngchiiLangSwitch",
-                L"",
+                L"EN/VN",
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                 bx, by, bw, bh,
                 hWnd,
-                (HMENU)ID_LANG_BTN,
-                g_hInst ? g_hInst : GetModuleHandleW(NULL),
+                (HMENU)0x9876,
+                g_hInst,
                 NULL
             );
             if (s_hwndLangBtn) {
@@ -886,12 +1006,11 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             }
         }
 
-        SetTimer(hWnd, TIMER_ID_YNGCHII, 400, NULL);
-        TriggerLiveQtWidgetTranslation();
+        SetTimer(hWnd, TIMER_ID_YNGCHII, 250, NULL);
         return 0;
     }
 
-    if (uMsg == WM_SIZE || uMsg == WM_ACTIVATE) {
+    if (uMsg == WM_SIZE) {
         s_is_in_game = IsInGameWindow(hWnd);
         if (s_is_in_game) {
             if (s_hwndLangBtn && IsWindow(s_hwndLangBtn) && IsWindowVisible(s_hwndLangBtn)) {
@@ -927,22 +1046,21 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             if (style & WS_CLIPCHILDREN) {
                 SetWindowLongPtrW(hWnd, GWL_STYLE, style & ~WS_CLIPCHILDREN);
             }
-            return 0;
-        }
-
-        LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
-        if (!(style & WS_CLIPCHILDREN)) {
-            SetWindowLongPtrW(hWnd, GWL_STYLE, style | WS_CLIPCHILDREN);
-        }
-        if (s_hwndLangBtn && IsWindow(s_hwndLangBtn)) {
-            int bx, by, bw, bh;
-            GetToggleSwitchGeometry(hWnd, &bx, &by, &bw, &bh);
-            SetWindowPos(s_hwndLangBtn, HWND_TOP, bx, by, bw, bh, SWP_NOACTIVATE);
-            if (!IsWindowVisible(s_hwndLangBtn)) {
-                ShowWindow(s_hwndLangBtn, SW_SHOW);
+        } else {
+            LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+            if (!(style & WS_CLIPCHILDREN)) {
+                SetWindowLongPtrW(hWnd, GWL_STYLE, style | WS_CLIPCHILDREN);
             }
+            if (s_hwndLangBtn && IsWindow(s_hwndLangBtn)) {
+                int bx, by, bw, bh;
+                GetToggleSwitchGeometry(hWnd, &bx, &by, &bw, &bh);
+                SetWindowPos(s_hwndLangBtn, HWND_TOP, bx, by, bw, bh, SWP_NOACTIVATE);
+                if (!IsWindowVisible(s_hwndLangBtn)) {
+                    ShowWindow(s_hwndLangBtn, SW_SHOW);
+                }
+            }
+            TriggerLiveQtWidgetTranslation();
         }
-        TriggerLiveQtWidgetTranslation();
         return 0;
     }
 
@@ -1054,9 +1172,223 @@ static void LogActiveStepSwitches(const char* step_tag, ULONG actual_res) {
 }
 
 // ==============================================================================
-// 6. MONITOR THREAD: WINDOW TITLE, ICON, EN/VN SWITCH, & THREAD PRIORITIES
+// 6. OPTIMIZED PRESET AUTO-APPLICATION (ENHANCEMENT 3)
+// ==============================================================================
+static void ApplyOptimizedPresetIfNeeded(void) {
+    char appdata[MAX_PATH] = {0};
+    if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) <= 0) return;
+
+    char stamp_path[MAX_PATH];
+    snprintf(stamp_path, sizeof(stamp_path), "%s\\eden\\config\\yngchii_preset_v56_applied.stamp", appdata);
+
+    FILE* f_stamp = fopen(stamp_path, "r");
+    if (f_stamp) {
+        fclose(f_stamp);
+        return; // Already applied
+    }
+
+    char exe_dir[MAX_PATH] = {0};
+    if (GetModuleFileNameA(NULL, exe_dir, MAX_PATH) <= 0) return;
+    char* slash = strrchr(exe_dir, '\\');
+    if (slash) *slash = '\0';
+
+    char preset_qt[MAX_PATH];
+    snprintf(preset_qt, sizeof(preset_qt), "%s\\config_preset\\qt-config.ini", exe_dir);
+
+    char dest_qt[MAX_PATH];
+    snprintf(dest_qt, sizeof(dest_qt), "%s\\eden\\config\\qt-config.ini", appdata);
+
+    FILE* f_src = fopen(preset_qt, "r");
+    if (f_src) {
+        // Read existing gamedirs from dest_qt to preserve user's game library
+        char gamedirs_buf[4096] = {0};
+        size_t gamedirs_len = 0;
+
+        FILE* f_old = fopen(dest_qt, "r");
+        if (f_old) {
+            char line[512];
+            while (fgets(line, sizeof(line), f_old)) {
+                if (strstr(line, "paths\\gamedirs") != NULL || strstr(line, "Paths\\gamedirs") != NULL) {
+                    size_t l = strlen(line);
+                    if (gamedirs_len + l < sizeof(gamedirs_buf) - 1) {
+                        memcpy(gamedirs_buf + gamedirs_len, line, l);
+                        gamedirs_len += l;
+                        gamedirs_buf[gamedirs_len] = '\0';
+                    }
+                }
+            }
+            fclose(f_old);
+        }
+
+        // Write merged file
+        char dest_dir[MAX_PATH];
+        snprintf(dest_dir, sizeof(dest_dir), "%s\\eden\\config", appdata);
+        CreateDirectoryA(dest_dir, NULL);
+
+        FILE* f_out = fopen(dest_qt, "w");
+        if (f_out) {
+            char line[1024];
+            int in_ui_sec = 0;
+            int gamedirs_written = 0;
+
+            while (fgets(line, sizeof(line), f_src)) {
+                if (strncmp(line, "[UI]", 4) == 0) {
+                    in_ui_sec = 1;
+                    fputs(line, f_out);
+                    if (gamedirs_len > 0 && !gamedirs_written) {
+                        fputs(gamedirs_buf, f_out);
+                        gamedirs_written = 1;
+                    }
+                    continue;
+                }
+                if (line[0] == '[' && strncmp(line, "[UI]", 4) != 0) {
+                    in_ui_sec = 0;
+                }
+                if (in_ui_sec && gamedirs_len > 0 &&
+                    (strstr(line, "paths\\gamedirs") != NULL || strstr(line, "Paths\\gamedirs") != NULL)) {
+                    continue; // Skip template gamedirs, keep user's
+                }
+                fputs(line, f_out);
+            }
+            fclose(f_out);
+        }
+        fclose(f_src);
+    }
+
+    // Copy custom game config
+    char preset_custom[MAX_PATH];
+    snprintf(preset_custom, sizeof(preset_custom), "%s\\config_preset\\custom\\0400486024DEC000.ini", exe_dir);
+    char dest_custom_dir[MAX_PATH];
+    snprintf(dest_custom_dir, sizeof(dest_custom_dir), "%s\\eden\\config\\custom", appdata);
+    CreateDirectoryA(dest_custom_dir, NULL);
+    char dest_custom[MAX_PATH];
+    snprintf(dest_custom, sizeof(dest_custom), "%s\\eden\\config\\custom\\0400486024DEC000.ini", appdata);
+
+    CopyFileA(preset_custom, dest_custom, FALSE);
+
+    // Write stamp
+    FILE* f_out_stamp = fopen(stamp_path, "w");
+    if (f_out_stamp) {
+        fprintf(f_out_stamp, "Yngchii-X3D v5.6 preset applied successfully at %lld\n", (long long)time(NULL));
+        fclose(f_out_stamp);
+    }
+}
+
+// ==============================================================================
+// 7. DISCORD RICH PRESENCE (ENHANCEMENT 5)
+// ==============================================================================
+static DWORD WINAPI DiscordRpcThread(LPVOID lpParam) {
+    (void)lpParam;
+    DWORD myPid = GetCurrentProcessId();
+    HANDLE hPipe = INVALID_HANDLE_VALUE;
+    time_t session_start = time(NULL);
+    time_t game_start = 0;
+    int was_in_game = 0;
+
+    while (1) {
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            for (int i = 0; i < 10; i++) {
+                wchar_t pipe_name[64];
+                swprintf(pipe_name, 64, L"\\\\.\\pipe\\discord-ipc-%d", i);
+                hPipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+                if (hPipe != INVALID_HANDLE_VALUE) {
+                    // Send Handshake
+                    const char* hs = "{\"v\":1,\"client_id\":\"1569019855057715350\"}";
+                    uint32_t op = 0;
+                    uint32_t len = (uint32_t)strlen(hs);
+                    DWORD written = 0;
+                    WriteFile(hPipe, &op, 4, &written, NULL);
+                    WriteFile(hPipe, &len, 4, &written, NULL);
+                    WriteFile(hPipe, hs, len, &written, NULL);
+
+                    uint32_t resp_op = 0, resp_len = 0;
+                    DWORD read_bytes = 0;
+                    if (ReadFile(hPipe, &resp_op, 4, &read_bytes, NULL) &&
+                        ReadFile(hPipe, &resp_len, 4, &read_bytes, NULL)) {
+                        char resp_buf[1024];
+                        DWORD to_read = resp_len < 1023 ? resp_len : 1023;
+                        ReadFile(hPipe, resp_buf, to_read, &read_bytes, NULL);
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (hPipe != INVALID_HANDLE_VALUE) {
+            if (s_is_in_game && !was_in_game) {
+                game_start = time(NULL);
+            }
+            was_in_game = s_is_in_game;
+
+            char payload[2048];
+            time_t act_time = s_is_in_game ? (game_start ? game_start : session_start) : session_start;
+
+            char details[256];
+            char state[256];
+
+            if (s_is_in_game) {
+                if (s_game_title[0] != '\0') {
+                    snprintf(details, sizeof(details), "Playing %s", s_game_title);
+                } else {
+                    snprintf(details, sizeof(details), "Playing in In-Game Session");
+                }
+                snprintf(state, sizeof(state), "⚡ Yngvi's X3D Optimize: Active");
+            } else {
+                snprintf(details, sizeof(details), "Idle in Home Menu");
+                snprintf(state, sizeof(state), "⚡ Yngvi's X3D Optimize: Ready");
+            }
+
+            snprintf(payload, sizeof(payload),
+                "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%lu,\"activity\":{"
+                "\"details\":\"%s\","
+                "\"state\":\"%s\","
+                "\"timestamps\":{\"start\":%lld},"
+                "\"assets\":{"
+                "\"large_image\":\"pochita\","
+                "\"large_text\":\"Yngchii-X3D v5.6\","
+                "\"small_image\":\"pochita\","
+                "\"small_text\":\"Ryzen X3D Edition\""
+                "}}},\"nonce\":\"1\"}",
+                myPid, details, state, (long long)act_time);
+
+            uint32_t op = 1;
+            uint32_t len = (uint32_t)strlen(payload);
+            DWORD written = 0;
+            BOOL b1 = WriteFile(hPipe, &op, 4, &written, NULL);
+            BOOL b2 = WriteFile(hPipe, &len, 4, &written, NULL);
+            BOOL b3 = WriteFile(hPipe, payload, len, &written, NULL);
+
+            if (!b1 || !b2 || !b3) {
+                CloseHandle(hPipe);
+                hPipe = INVALID_HANDLE_VALUE;
+            } else {
+                DWORD avail = 0;
+                if (PeekNamedPipe(hPipe, NULL, 0, NULL, &avail, NULL) && avail >= 8) {
+                    uint32_t resp_op = 0, resp_len = 0;
+                    DWORD read_bytes = 0;
+                    ReadFile(hPipe, &resp_op, 4, &read_bytes, NULL);
+                    ReadFile(hPipe, &resp_len, 4, &read_bytes, NULL);
+                    char drain[2048];
+                    while (resp_len > 0) {
+                        DWORD chunk = resp_len > sizeof(drain) ? (DWORD)sizeof(drain) : resp_len;
+                        ReadFile(hPipe, drain, chunk, &read_bytes, NULL);
+                        resp_len -= read_bytes;
+                        if (read_bytes == 0) break;
+                    }
+                }
+            }
+        }
+
+        Sleep(2500);
+    }
+    return 0;
+}
+
+// ==============================================================================
+// 8. MONITOR THREAD: WINDOW TITLE, ICON, EN/VN SWITCH, & THREAD PRIORITIES
 // ==============================================================================
 static DWORD WINAPI MonitorThread(LPVOID lpParam) {
+    (void)lpParam;
     DWORD myPid = GetCurrentProcessId();
     HMODULE hExe = GetModuleHandleW(NULL);
     HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
@@ -1096,6 +1428,16 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                         wcscpy(target_prefix, L"Yngchii-X3D | v5.6 (Safe Mode - Non-Zen3/4/5)");
                     }
 
+                    // Dependencies window title
+                    if (wcsstr(title, L"Lichii Dependencies") != NULL) {
+                        SetWindowTextW(hwnd, L"Yngchii-X3D Dependencies");
+                        if (hChainsaw) {
+                            SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hChainsaw);
+                            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hChainsaw);
+                        }
+                    }
+
+                    // Main emulator window title
                     wchar_t* p = wcsstr(title, L"Fritchii | v5.6");
                     if (p != NULL) {
                         wchar_t new_title[512] = {0};
@@ -1110,6 +1452,23 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                             s_is_in_game = 1;
                             if (s_hwndLangBtn && IsWindow(s_hwndLangBtn) && IsWindowVisible(s_hwndLangBtn)) {
                                 ShowWindow(s_hwndLangBtn, SW_HIDE);
+                            }
+                            // Extract game title from suffix
+                            // e.g. suffix = " | Clang ... | The Legend of Zelda: Ocarina of Time (64-bit) | Nvidia"
+                            wchar_t* p_pipe3 = wcsstr(suffix, L" | ");
+                            if (p_pipe3) {
+                                wchar_t* p_pipe4 = wcsstr(p_pipe3 + 3, L" | ");
+                                if (p_pipe4) {
+                                    wchar_t* p_pipe5 = wcsstr(p_pipe4 + 3, L" | ");
+                                    if (p_pipe5) {
+                                        int name_len = (int)(p_pipe5 - (p_pipe4 + 3));
+                                        if (name_len > 0 && name_len < 250) {
+                                            wchar_t gname_w[256] = {0};
+                                            wcsncpy(gname_w, p_pipe4 + 3, name_len);
+                                            WideCharToMultiByte(CP_UTF8, 0, gname_w, -1, s_game_title, sizeof(s_game_title), NULL, NULL);
+                                        }
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1192,7 +1551,7 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
 }
 
 // ==============================================================================
-// 7. DLL ENTRY POINT
+// 9. DLL ENTRY POINT
 // ==============================================================================
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
@@ -1202,6 +1561,23 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
         DetectSupportedRyzenCpu();
         g_lang_vn = LoadLanguagePreference();
         InstallQt6IATHooks();
+
+        // Environment variables for In-App Updater & What's New
+        SetEnvPair("EDEN_UPDATE_URL", "https://api.github.com/repos/yngvifreyr1810/Yngchii-X3D/releases?per_page=100");
+
+        char exe_path[MAX_PATH] = {0};
+        if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
+            char* last_slash = strrchr(exe_path, '\\');
+            if (last_slash) {
+                *last_slash = '\0';
+                char notes_path[MAX_PATH];
+                snprintf(notes_path, MAX_PATH, "%s\\whats-new.md", exe_path);
+                SetEnvPair("FRITCHII_NOTES_PREVIEW", notes_path);
+            }
+        }
+
+        // Apply optimized preset on first launch
+        ApplyOptimizedPresetIfNeeded();
 
         ULONG actual_res = 0;
         if (g_is_supported_ryzen) {
@@ -1252,15 +1628,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
             SetEnvPair("__GL_SHADER_DISK_CACHE_SIZE", "10737418240");
             SetEnvPair("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
 
-            char exe_path[MAX_PATH] = {0};
-            if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
-                char* last_slash = strrchr(exe_path, '\\');
-                if (last_slash) {
-                    *last_slash = '\0';
-                    char switch_path[MAX_PATH];
-                    snprintf(switch_path, MAX_PATH, "%s\\nx2_switches.txt", exe_path);
-                    LoadNx2SwitchesFile(switch_path);
-                }
+            if (exe_path[0] != '\0') {
+                char switch_path[MAX_PATH];
+                snprintf(switch_path, MAX_PATH, "%s\\nx2_switches.txt", exe_path);
+                LoadNx2SwitchesFile(switch_path);
             }
 
             char appdata[MAX_PATH] = {0};
@@ -1275,6 +1646,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
 
         LogActiveStepSwitches("v5.6", actual_res);
         CreateThread(NULL, 0, MonitorThread, NULL, 0, NULL);
+        CreateThread(NULL, 0, DiscordRpcThread, NULL, 0, NULL);
     }
     return TRUE;
 }
