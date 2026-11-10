@@ -1,4 +1,4 @@
-name: Upstream Auto-Merge & Pre-Release Sync
+name: Upstream Auto-Merge & Sync
 
 on:
   schedule:
@@ -23,6 +23,12 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      already_synced: ${{ steps.upstream_info.outputs.already_synced }}
+      version_num: ${{ steps.upstream_info.outputs.version_num }}
+      target_yngchii_tag: ${{ steps.upstream_info.outputs.target_yngchii_tag }}
+      latest_upstream_tag: ${{ steps.upstream_info.outputs.latest_upstream_tag }}
+      merge_status: ${{ steps.do_merge.outputs.merge_status }}
 
     steps:
       - name: Checkout Yngchii-X3D Repository
@@ -53,7 +59,7 @@ jobs:
             exit 1
           fi
           
-          # Extract version number (e.g. 5.3 from fritchii-v5.3)
+          # Extract version number (e.g. 5.6 from fritchii-v5.6)
           VERSION_NUM=${LATEST_UPSTREAM_TAG#fritchii-v}
           TARGET_YNGCHII_TAG="yngchii-v${VERSION_NUM}"
           
@@ -97,7 +103,7 @@ jobs:
             gh pr create \
               --repo "${{ github.repository }}" \
               --title "Sync Upstream $UPSTREAM_TAG into Yngchii-X3D" \
-              --body "Automated merge detected conflicts requiring review. Please resolve conflicts and merge to trigger the pre-release." \
+              --body "Automated merge detected conflicts requiring review. Please resolve conflicts and merge to trigger the release." \
               --base main \
               --head "$BRANCH_NAME"
             
@@ -112,7 +118,7 @@ jobs:
           git add dist/frizti_version.txt CHANGELOG.md
           git commit --amend --no-edit
 
-      - name: Push Main and Create GitHub Pre-Release
+      - name: Push Main and Create GitHub Official Release
         if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
         run: |
           VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
@@ -125,8 +131,8 @@ jobs:
           git tag -a "$TAG_NAME" -m "Release Yngchii-X3D v${VERSION_NUM}" 2>/dev/null || true
           git push origin "$TAG_NAME" || true
           
-          # Create Pre-Release on GitHub (--prerelease prevents in-emulator updater from offering before testing)
-          RELEASE_TITLE="Yngchii-X3D v${VERSION_NUM} (Upstream v${VERSION_NUM} Hotfix Sync)"
+          # Create Official Release on GitHub (--latest marks it as the official primary release)
+          RELEASE_TITLE="Yngchii-X3D v${VERSION_NUM}"
           
           if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release $TAG_NAME already exists on GitHub, updating notes..."
@@ -134,12 +140,31 @@ jobs:
               --repo "${{ github.repository }}" \
               --title "$RELEASE_TITLE" \
               --notes-file release_notes.md \
-              --prerelease
+              --latest
           else
-            echo "Creating new pre-release $TAG_NAME on ${{ github.repository }}..."
+            echo "Creating official release $TAG_NAME on ${{ github.repository }}..."
             gh release create "$TAG_NAME" \
               --repo "${{ github.repository }}" \
               --title "$RELEASE_TITLE" \
               --notes-file release_notes.md \
-              --prerelease
+              --latest
           fi
+
+  package-windows:
+    name: Package Single Windows x64 Binary
+    needs: check-and-merge
+    if: needs.check-and-merge.outputs.already_synced == 'false' && needs.check-and-merge.outputs.merge_status == 'clean'
+    runs-on: windows-latest
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout Yngchii-X3D Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and Attach Windows x64 Release Asset
+        run: |
+          python .github/scripts/package_windows.py "${{ needs.check-and-merge.outputs.version_num }}" "${{ needs.check-and-merge.outputs.latest_upstream_tag }}" "${{ needs.check-and-merge.outputs.target_yngchii_tag }}"

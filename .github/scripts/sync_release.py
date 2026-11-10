@@ -78,14 +78,15 @@ def main():
 
     # 5. Generate release_notes.md
     release_notes = (
-        f"## Yngchii-X3D v{version_num} Pre-Release\n\n"
-        f"This pre-release automatically synchronizes all upstream bug fixes from **Fritchii v{version_num}**:\n"
+        f"# Yngchii-X3D v{version_num} — Official Community Release (Windows x64)\n\n"
+        f"**Yngchii-X3D v{version_num}** is the official high-performance AMD Ryzen 3D V-Cache (7800X3D / 9800X3D / Zen 3/4/5) and bilingual community release, built directly upon upstream **[Frizti/Fritchii v{version_num}](https://github.com/Frizti/Fritchii)**.\n\n"
         f"- Upstream release tag: `{upstream_tag}`\n"
         f"- Preserves full AMD Ryzen 7800X3D / 9800X3D CCD thread pinning and zero-sleep futex synchronization.\n"
         f"- Incorporates latest upstream fixes and improvements.\n\n"
         f"### Upstream Commits Synchronized\n"
         f"{commits_summary}\n\n"
-        f"> **Notice for Users**: This is an automated sync pre-release. Verified release binaries will be uploaded shortly.\n"
+        f"### Package Details\n"
+        f"- **`Yngchii-X3D-v{version_num}-Windows-x64.zip`**: Single all-in-one package for Windows x64 (AMD & Intel).\n"
     )
 
     with open("release_notes.md", "w", encoding="utf-8") as f:

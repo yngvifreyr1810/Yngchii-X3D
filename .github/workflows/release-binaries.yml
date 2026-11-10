@@ -1,0 +1,101 @@
+name: Release Windows Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Target Release Tag (e.g. yngchii-v5.6)'
+        required: true
+        type: string
+      publish_release:
+        description: 'Publish/Attach binary to GitHub Release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x86_64:
+    name: Build & Release Windows x86_64
+    runs-on: windows-2022
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt on Windows
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install Vulkan SDK on Windows
+        shell: pwsh
+        run: ./tools/windows/install-vulkan-sdk.ps1
+
+      - name: Configure CMake
+        shell: bash
+        run: >-
+          cmake -S . -B build/release -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DYUZU_TESTS=OFF
+          -DYUZU_CMD=ON
+          -DYUZU_ROOM=OFF
+          -DYUZU_ROOM_STANDALONE=OFF
+          -DYUZU_USE_BUNDLED_QT=OFF
+          -DYUZU_USE_BUNDLED_SDL3=ON
+          -DENABLE_UPDATE_CHECKER=ON
+
+      - name: Compile Windows Binary
+        shell: bash
+        run: ninja -C build/release
+
+      - name: Deploy Qt & Package Single Windows x64 Archive
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag_name }}"
+          if (-not $tag) { $tag = "latest" }
+          $stage = "Yngchii-X3D-$tag"
+          New-Item -ItemType Directory -Path $stage -Force
+
+          # Copy compiled output
+          Copy-Item -Recurse -Force build/release/bin/* $stage/
+
+          # Rename executable to Yngchii-X3D.exe
+          if (Test-Path "$stage/lichii.exe") {
+            Move-Item -Force "$stage/lichii.exe" "$stage/Yngchii-X3D.exe"
+          }
+
+          # Deploy Qt dependencies
+          windeployqt --release --no-translations --no-system-d3d-compiler "$stage/Yngchii-X3D.exe"
+
+          # Copy custom assets & version proxy
+          if (Test-Path ".github/assets") {
+            Copy-Item -Force .github/assets/* $stage/
+          }
+
+          # Create zip package
+          $zipName = "Yngchii-X3D-$tag-Windows-x64.zip"
+          Compress-Archive -Path $stage -DestinationPath $zipName -Force
+
+          # Upload to GitHub Release
+          if ("${{ inputs.publish_release }}" -eq "true") {
+            gh release upload "$tag" "$zipName" --clobber --repo "${{ github.repository }}"
+          }

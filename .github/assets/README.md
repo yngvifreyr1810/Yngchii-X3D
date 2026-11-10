@@ -1,0 +1,63 @@
+================================================================================
+          YNGCHII-X3D (FRITCHII v5.6) — SPECIAL COMMUNITY RELEASE
+               SIMPLE HOW-TO SETUP & OPTIMIZATION GUIDE
+================================================================================
+
+********************************************************************************
+* IMPORTANT DISCLAIMER:                                                        *
+* This package and repository do NOT contain the game, keys, or any            *
+* copyrighted files, and do NOT explain how to get them. You must own a        *
+* legally acquired copy of the game. Everything created on your PC             *
+* (shader caches, saves, etc.) comes from your own game and stays on your PC.  *
+* Never share copyrighted files.                                               *
+********************************************************************************
+
+Welcome to Yngchii-X3D (Fritchii v5.6) — A high-performance custom build
+specifically engineered for The Legend of Zelda: Ocarina of Time and Nintendo
+Switch titles on modern PC hardware!
+
+--------------------------------------------------------------------------------
+1. KEY FEATURES:
+--------------------------------------------------------------------------------
+- Smart CPU Architecture Gate:
+  Automatically detects AMD Ryzen 5, 7, 9 processors (Zen 3, Zen 4, Zen 5, and
+  especially 3D V-Cache X3D). Automatically engages GPU Split Batch reduction,
+  L1/L2 Cache Shield, and thread priority pacing for a flat 60 FPS experience.
+  Non-Zen3/4/5 systems automatically run in verified Safe Fallback mode.
+
+- Live Language Switcher (EN / VN):
+  English (EN) is set by default. You can switch to Vietnamese (VN) anytime by
+  clicking the [EN / VN] toggle button on the left sidebar, or by pressing
+  [Ctrl + L] or [F9].
+
+--------------------------------------------------------------------------------
+2. SYSTEM REQUIREMENTS:
+--------------------------------------------------------------------------------
+- OS: Windows 10 or Windows 11 (64-bit).
+- Processor: AMD Ryzen or Intel Core (Ryzen 5/7/9 Zen 3/4/5 recommended).
+- Graphics: NVIDIA GeForce GTX 1060 / RTX Series or modern AMD Radeon (Vulkan 1.3).
+- Storage: 30 GB available space on SSD.
+- Game File: Valid game update package (.nup format, ~25 GB).
+
+--------------------------------------------------------------------------------
+3. QUICK START STEPS:
+--------------------------------------------------------------------------------
+Step 1: Launch "Yngchii-X3D.exe".
+Step 2: When prompted for FPS Target, select 60 FPS (or 30 FPS for lower-power devices).
+Step 3: Double-click [+] or select "File" -> "Load Folder..." to add your game ROM directory.
+Step 4: Configure your controller via "Emulation" -> "Configure..." -> "Controls".
+Step 5: Set Graphics:
+        - API: Vulkan
+        - VSync Mode: "Immediate" or "Mailbox" (recommended for flat 60 FPS frame pacing).
+Step 6: Double-click the game icon and enjoy!
+
+--------------------------------------------------------------------------------
+4. USEFUL HOTKEYS:
+--------------------------------------------------------------------------------
+- [F11]: Toggle Fullscreen.
+- [Ctrl + L] or [F9]: Toggle Language (English <-> Vietnamese).
+- [F4]: Toggle Speed Limit.
+- "Reduce RAM usage" button on the bottom status bar: Purges standby memory cache.
+
+Enjoy the journey across Hyrule with Yngchii-X3D!
+================================================================================
