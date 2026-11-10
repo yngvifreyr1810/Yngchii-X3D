@@ -1,5 +1,5 @@
-﻿================================================================================
-          YNGCHII-X3D (FRITCHII v5.6) — BẢN PHÁT HÀNH ĐẶC BIỆT CỘNG ĐỒNG VIỆT NAM
+================================================================================
+          YNGCHII-X3D V5.6.1.1 (FRITCHII UPSTREAM V5.6) — BẢN PHÁT HÀNH ĐẶC BIỆT CỘNG ĐỒNG VIỆT NAM
               HƯỚNG DẪN CÀI ĐẶT & SỬ DỤNG NHANH CHO GAME THỦ VIỆT NAM
 ================================================================================
 
@@ -12,12 +12,12 @@
 * bản game cá nhân của bạn — tuyệt đối không chia sẻ các tệp có bản quyền.     *
 ********************************************************************************
 
-Chào mừng bạn đến với Yngchii-X3D (Fritchii v5.6) — Bản dựng tối ưu hoá chuyên sâu
+Chào mừng bạn đến với Yngchii-X3D V5.6.1.1 (Fritchii upstream V5.6) — Bản dựng tối ưu hoá chuyên sâu
 dành riêng cho trải nghiệm The Legend of Zelda: Ocarina of Time và các tựa game
 Nintendo Switch trên PC với hiệu năng cao nhất, mượt mà và mát mẻ nhất!
 
 --------------------------------------------------------------------------------
-I. TÍNH NĂNG NỔI BẬT CỦA PHIÊN BẢN v5.6-Step7-VN:
+I. TÍNH NĂNG NỔI BẬT CỦA PHIÊN BẢN V5.6.1.1:
 --------------------------------------------------------------------------------
 1. Cổng Tự Động Nhận Diện Phần Cứng (Smart Hardware Gate):
    - Tự động nhận diện dòng vi xử lý AMD Ryzen 5 / 7 / 9 thế hệ Zen 3 (5000 Series),

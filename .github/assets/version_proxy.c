@@ -13,6 +13,11 @@
 #include <gdiplus.h>
 #include <shlwapi.h>
 
+#ifndef YNGCHII_VERSION
+#define YNGCHII_VERSION "5.6.1.1"
+#endif
+#define YNGCHII_DISPLAY_VERSION "V" YNGCHII_VERSION
+
 #ifndef PROCESS_POWER_THROTTLING_CURRENT_VERSION
 #define PROCESS_POWER_THROTTLING_CURRENT_VERSION 1
 #endif
@@ -1108,8 +1113,10 @@ static pfn_setIcon s_pfn_setIcon = NULL;
 static void* s_hero_backdrop = NULL;
 static char s_last_hero_title[256] = {0};
 static int s_last_backdrop_w = 0;
-static char s_hero_backdrop_pix[64] = {0};
-static int s_hero_backdrop_pix_inited = 0;
+static void (*s_pfn_label_pixmap)(const void*, void*) = NULL;
+static void (*s_pfn_label_clear)(void*) = NULL;
+static bool (*s_pfn_pixmap_save)(const void*, const void*, const char*, int) = NULL;
+static bool (*s_pfn_pixmap_isNull)(const void*) = NULL;
 
 static pfn_removeWidget s_pfn_removeWidget = NULL;
 static pfn_insertWidget s_pfn_insertWidget = NULL;
@@ -1620,6 +1627,71 @@ static void PopulateGameMeta(void* tree_view) {
     }
 }
 
+static bool SaveHeroCover(void* cover, const wchar_t* path) {
+    if (!cover || !s_pfn_isVisible || !s_pfn_isVisible(cover) || !s_pfn_label_pixmap ||
+        !s_pfn_pixmap_save || !s_pfn_pixmap_isNull || !s_pfn_dtor_pixmap) return false;
+
+    char utf8_path[MAX_PATH * 3];
+    if (!WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8_path, sizeof(utf8_path), NULL, NULL)) return false;
+
+    alignas(void*) char pixmap[64] = {0};
+    alignas(void*) char qpath[32] = {0};
+    s_pfn_label_pixmap(cover, pixmap);
+    s_pfn_fromUtf8_str(qpath, utf8_path, -1);
+    bool saved = !s_pfn_pixmap_isNull(pixmap) && s_pfn_pixmap_save(pixmap, qpath, "PNG", -1);
+    s_pfn_dtor(qpath);
+    s_pfn_dtor_pixmap(pixmap);
+    return saved;
+}
+
+static void RefreshHeroBackdrop(void* cover, const char* program_id, int width, int height) {
+    if (!s_pfn_pixmap_ctor_file || !s_pfn_setPixmap || !s_pfn_pixmap_isNull || !s_pfn_dtor_pixmap) return;
+    if (s_pfn_label_clear) s_pfn_label_clear(s_hero_backdrop);
+
+    wchar_t exe_dir[MAX_PATH] = {0};
+    DWORD exe_len = GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+    if (!exe_len || exe_len >= MAX_PATH || !PathRemoveFileSpecW(exe_dir)) return;
+
+    wchar_t temp_dir[MAX_PATH];
+    DWORD temp_len = GetTempPathW(MAX_PATH, temp_dir);
+    if (!temp_len || temp_len >= MAX_PATH) return;
+
+    wchar_t output[MAX_PATH];
+    if (!GetTempFileNameW(temp_dir, L"Ybg", 0, output)) return;
+
+    wchar_t source[MAX_PATH] = {0};
+    wchar_t cover_temp[MAX_PATH] = {0};
+    if (program_id[0]) {
+        swprintf(source, MAX_PATH, L"%s\\covers\\%S_banner.png", exe_dir, program_id);
+        if (GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES) {
+            swprintf(source, MAX_PATH, L"%s\\covers\\%S.png", exe_dir, program_id);
+        }
+    }
+    if (!source[0] || GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES) {
+        // The home page already displays the ROM icon or the player's local cover.
+        if (cover && GetTempFileNameW(temp_dir, L"Ycv", 0, cover_temp) && SaveHeroCover(cover, cover_temp)) {
+            wcscpy(source, cover_temp);
+        } else {
+            swprintf(source, MAX_PATH, L"%s\\hero_default.png", exe_dir);
+        }
+    }
+
+    if (GenerateBlurredHeroBackdrop(source, output, width, height)) {
+        char utf8_path[MAX_PATH * 3];
+        if (WideCharToMultiByte(CP_UTF8, 0, output, -1, utf8_path, sizeof(utf8_path), NULL, NULL)) {
+            alignas(void*) char pixmap[64] = {0};
+            alignas(void*) char qpath[32] = {0};
+            s_pfn_fromUtf8_str(qpath, utf8_path, -1);
+            s_pfn_pixmap_ctor_file(pixmap, qpath, "PNG", 0);
+            s_pfn_dtor(qpath);
+            if (!s_pfn_pixmap_isNull(pixmap)) s_pfn_setPixmap(s_hero_backdrop, pixmap);
+            s_pfn_dtor_pixmap(pixmap);
+        }
+    }
+    if (cover_temp[0]) DeleteFileW(cover_temp);
+    DeleteFileW(output);
+}
+
 static void TriggerLiveQtWidgetTranslation(int force) {
     if (s_is_in_game) return;
     static int s_in_translation = 0;
@@ -1646,6 +1718,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             s_pfn_qicon_ctor_file = (pfn_qicon_ctor_file)GetProcAddress(hGui, "??0QIcon@@QEAA@AEBVQString@@@Z");
             s_pfn_qicon_ctor_pixmap = (pfn_qicon_ctor_pixmap)GetProcAddress(hGui, "??0QIcon@@QEAA@AEBVQPixmap@@@Z");
             s_pfn_pixmap_ctor_xpm = (decltype(s_pfn_pixmap_ctor_xpm))GetProcAddress(hGui, "??0QPixmap@@QEAA@QEBQEBD@Z");
+            s_pfn_pixmap_save = (decltype(s_pfn_pixmap_save))GetProcAddress(hGui, "?save@QPixmap@@QEBA_NAEBVQString@@PEBDH@Z");
+            s_pfn_pixmap_isNull = (decltype(s_pfn_pixmap_isNull))GetProcAddress(hGui, "?isNull@QPixmap@@QEBA_NXZ");
             s_pfn_qicon_dtor = (pfn_qicon_dtor)GetProcAddress(hGui, "??1QIcon@@QEAA@XZ");
         }
         s_pfn_inherits = (pfn_inherits)GetProcAddress(hCore, "?inherits@QObject@@QEBA_NPEBD@Z");
@@ -1671,6 +1745,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             s_pfn_qitem_data = (pfn_qitem_data)GetProcAddress(hGui, "?data@QStandardItem@@UEBA?AVQVariant@@H@Z");
         }
         s_pfn_setPixmap = (pfn_setPixmap)GetProcAddress(hWidgets, "?setPixmap@QLabel@@QEAAXAEBVQPixmap@@@Z");
+        s_pfn_label_pixmap = (decltype(s_pfn_label_pixmap))GetProcAddress(hWidgets, "?pixmap@QLabel@@QEBA?AVQPixmap@@XZ");
+        s_pfn_label_clear = (decltype(s_pfn_label_clear))GetProcAddress(hWidgets, "?clear@QLabel@@QEAAXXZ");
         s_pfn_fromUtf8_str = (pfn_fromUtf8_str)GetProcAddress(hCore, "?fromUtf8@QString@@SA?AV1@PEBD_J@Z");
         s_pfn_toUtf8 = (pfn_toUtf8_fn)GetProcAddress(hCore, "?toUtf8@QString@@QEGBA?AVQByteArray@@XZ");
         if (!s_pfn_toUtf8) s_pfn_toUtf8 = (pfn_toUtf8_fn)GetProcAddress(hCore, "?toUtf8@QString@@QEHAA?AVQByteArray@@XZ");
@@ -1861,7 +1937,10 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                     if (s_pfn_setScaledContents) s_pfn_setScaledContents(s_hero_backdrop, 1);
                     if (s_pfn_setStyleSheet) {
                         char q_css[32] = {0};
-                        s_pfn_fromUtf8_str(q_css, "QLabel#FritchiiHeroBackdrop { background: transparent; }", -1);
+                        s_pfn_fromUtf8_str(q_css,
+                            "QLabel#FritchiiHeroBackdrop { border-radius: 18px; "
+                            "background: qradialgradient(cx:0.77, cy:0.4, radius:0.86, "
+                            "stop:0 rgba(111,51,31,126), stop:0.58 rgba(43,25,29,150), stop:1 rgba(11,11,14,196)); }", -1);
                         s_pfn_setStyleSheet(s_hero_backdrop, q_css);
                         s_pfn_dtor(q_css);
                     }
@@ -1872,53 +1951,9 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 if (s_pfn_setGeometry) s_pfn_setGeometry(s_hero_backdrop, backdrop_x, backdrop_y, backdrop_w, backdrop_h);
                 if (s_pfn_lower) s_pfn_lower(s_hero_backdrop);
                 if (s_pfn_show) s_pfn_show(s_hero_backdrop);
-
-                if (force || lang_changed || mode_changed ||
-                    strcmp(s_last_hero_title, cur_hero_title) != 0 ||
-                    abs(s_last_backdrop_w - backdrop_w) > 4 ||
-                    !s_hero_backdrop_pix_inited) {
-
-                    wchar_t exe_dir[MAX_PATH] = {0};
-                    GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
-                    PathRemoveFileSpecW(exe_dir);
-
-                    wchar_t banner_src[MAX_PATH] = {0};
-                    if (hero_pid[0] != '\0') {
-                        swprintf(banner_src, MAX_PATH, L"%s\\covers\\%S_banner.png", exe_dir, hero_pid);
-                        if (GetFileAttributesW(banner_src) == INVALID_FILE_ATTRIBUTES) {
-                            swprintf(banner_src, MAX_PATH, L"%s\\covers\\%S.png", exe_dir, hero_pid);
-                        }
-                    }
-                    if (banner_src[0] == L'\0' || GetFileAttributesW(banner_src) == INVALID_FILE_ATTRIBUTES) {
-                        swprintf(banner_src, MAX_PATH, L"%s\\hero_default.png", exe_dir);
-                    }
-
-                    wchar_t backdrop_out[MAX_PATH];
-                    swprintf(backdrop_out, MAX_PATH, L"%s\\covers\\current_hero_backdrop.png", exe_dir);
-
-                    if (GenerateBlurredHeroBackdrop(banner_src, backdrop_out, backdrop_w, backdrop_h)) {
-                        char utf8_path[MAX_PATH * 2] = {0};
-                        WideCharToMultiByte(CP_UTF8, 0, backdrop_out, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
-
-                        if (s_hero_backdrop_pix_inited && s_pfn_dtor_pixmap) {
-                            s_pfn_dtor_pixmap(s_hero_backdrop_pix);
-                            s_hero_backdrop_pix_inited = 0;
-                        }
-
-                        if (s_pfn_pixmap_ctor_file && s_pfn_setPixmap) {
-                            char q_pstr[32] = {0};
-                            s_pfn_fromUtf8_str(q_pstr, utf8_path, -1);
-                            s_pfn_pixmap_ctor_file(s_hero_backdrop_pix, q_pstr, NULL, 0);
-                            s_pfn_dtor(q_pstr);
-                            s_hero_backdrop_pix_inited = 1;
-                            s_pfn_setPixmap(s_hero_backdrop, s_hero_backdrop_pix);
-                        }
-                    }
-                    strncpy(s_last_hero_title, cur_hero_title, sizeof(s_last_hero_title) - 1);
-                    s_last_backdrop_w = backdrop_w;
-                }
             }
 
+            void* hero_cover = NULL;
             const Qt6List* page_children = s_pfn_children ? s_pfn_children(page) : NULL;
             if (page_children && page_children->ptr && page_children->size > 0) {
                 for (int64_t c = 0; c < page_children->size; c++) {
@@ -1936,7 +1971,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                             if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_n);
                             s_pfn_dtor(qstr_n);
                         }
-                        if (strcmp(cname, "FritchiiHeroTitle") != 0 && strcmp(cname, "FritchiiHeroBackdrop") != 0) {
+                        if (!cname[0] || strcmp(cname, "FritchiiHeroCover") == 0) {
+                            hero_cover = child;
                             if (cname[0] == '\0' && s_pfn_setObjectName) {
                                 char q_on[32] = {0};
                                 s_pfn_fromUtf8_str(q_on, "FritchiiHeroCover", -1);
@@ -1980,6 +2016,13 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         }
                     }
                 }
+            }
+
+            if (s_hero_backdrop && (force || lang_changed || mode_changed ||
+                strcmp(s_last_hero_title, cur_hero_title) != 0 || abs(s_last_backdrop_w - backdrop_w) > 4)) {
+                RefreshHeroBackdrop(hero_cover, hero_pid, backdrop_w, backdrop_h);
+                strncpy(s_last_hero_title, cur_hero_title, sizeof(s_last_hero_title) - 1);
+                s_last_backdrop_w = backdrop_w;
             }
         }
         for (int64_t i = 0; i < widget_list.size; i++) {
@@ -2790,6 +2833,31 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 continue;
             }
 
+            if (strcmp(obj_name_buf, "labelBuildInfo") == 0 && s_pfn_lbl_text && s_pfn_lbl_setText) {
+                const char upstream[] = "Fritchii | v5.6";
+                char q_text[32] = {0};
+                char q_bytes[32] = {0};
+                s_pfn_lbl_text(w, q_text);
+                s_pfn_toUtf8(q_text, q_bytes);
+                const char* text = s_pfn_constData(q_bytes);
+                const char* version = text ? strstr(text, upstream) : NULL;
+                if (version) {
+                    char updated[512];
+                    int len = snprintf(updated, sizeof(updated),
+                        "%.*sYngchii-X3D " YNGCHII_DISPLAY_VERSION " (Fritchii upstream V5.6)%s",
+                        (int)(version - text), text, version + sizeof(upstream) - 1);
+                    if (len > 0 && len < (int)sizeof(updated)) {
+                        char q_updated[32] = {0};
+                        s_pfn_fromUtf8_str(q_updated, updated, len);
+                        s_pfn_lbl_setText(w, q_updated);
+                        s_pfn_dtor(q_updated);
+                    }
+                }
+                if (s_pfn_qba_dtor) s_pfn_qba_dtor(q_bytes);
+                s_pfn_dtor(q_text);
+                continue;
+            }
+
             // Context Menu Actions (always check on every timer tick so right-click popups translate immediately)
             if (s_pfn_actions && s_pfn_act_text && s_pfn_act_setText && s_pfn_inherits(w, "QMenu")) {
                 struct {
@@ -3154,6 +3222,7 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
     }
 
     if (uMsg == WM_YNGCHII_INIT_BTN) {
+        SetTimer(hWnd, TIMER_ID_YNGCHII, 250, NULL);
         s_is_in_game = IsInGameWindow(hWnd);
         if (s_is_in_game) {
             if (s_hwndLangBtn && IsWindow(s_hwndLangBtn) && IsWindowVisible(s_hwndLangBtn)) {
@@ -3215,7 +3284,6 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             }
         }
 
-        SetTimer(hWnd, TIMER_ID_YNGCHII, 250, NULL);
         return 0;
     }
 
@@ -3267,6 +3335,8 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
                 if (!IsWindowVisible(s_hwndLangBtn)) {
                     ShowWindow(s_hwndLangBtn, SW_SHOW);
                 }
+            } else {
+                PostMessageW(hWnd, WM_YNGCHII_INIT_BTN, 0, 0);
             }
             TriggerLiveQtWidgetTranslation(0);
         }
@@ -3492,7 +3562,7 @@ static void ApplyOptimizedPresetIfNeeded(void) {
     // Write stamp
     FILE* f_out_stamp = fopen(stamp_path, "w");
     if (f_out_stamp) {
-        fprintf(f_out_stamp, "Yngchii-X3D v5.6 preset applied successfully at %lld\n", (long long)time(NULL));
+        fprintf(f_out_stamp, "Yngchii-X3D " YNGCHII_DISPLAY_VERSION " preset applied successfully at %lld\n", (long long)time(NULL));
         fclose(f_out_stamp);
     }
 }
@@ -3568,7 +3638,7 @@ static DWORD WINAPI DiscordRpcThread(LPVOID lpParam) {
                 "\"timestamps\":{\"start\":%lld},"
                 "\"assets\":{"
                 "\"large_image\":\"pochita\","
-                "\"large_text\":\"Yngchii-X3D v5.6\","
+                "\"large_text\":\"Yngchii-X3D " YNGCHII_DISPLAY_VERSION "\","
                 "\"small_image\":\"pochita\","
                 "\"small_text\":\"Ryzen X3D Edition\""
                 "}}},\"nonce\":\"1\"}",
@@ -3649,12 +3719,9 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                 wchar_t cls[128] = {0};
                 GetClassNameW(hwnd, cls, 128);
                 if (len > 0) {
-                    wchar_t target_prefix[128];
-                    if (g_is_supported_ryzen) {
-                        wcscpy(target_prefix, L"Yngchii-X3D | v5.6");
-                    } else {
-                        wcscpy(target_prefix, L"Yngchii-X3D | v5.6 (Safe Mode - Non-Zen3/4/5)");
-                    }
+                    const wchar_t* target_prefix = g_is_supported_ryzen
+                        ? L"Yngchii-X3D | " YNGCHII_DISPLAY_VERSION
+                        : L"Yngchii-X3D | " YNGCHII_DISPLAY_VERSION L" (Safe Mode - Non-Zen3/4/5)";
 
                     // Dependencies window title
                     if (wcsstr(title, L"Dependencies") != NULL) {
@@ -3736,10 +3803,19 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                         }
                     }
 
-                    if (!s_origMainWndProc && GetParent(hwnd) == NULL && wcsstr(cls, L"QWindowIcon") != NULL) {
-                        s_hwndMain = hwnd;
-                        s_origMainWndProc = (WNDPROC)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)MainWndProcHook);
-                        PostMessageW(hwnd, WM_YNGCHII_INIT_BTN, 0, 0);
+                    // Startup dialogs can also have a Qt QWindowIcon class.
+                    bool main_title = wcsncmp(title, L"Fritchii | v5.", 14) == 0 ||
+                                      wcsncmp(title, target_prefix, wcslen(target_prefix)) == 0;
+                    if (!s_origMainWndProc && main_title && IsWindowVisible(hwnd) &&
+                        !GetParent(hwnd) && wcsstr(cls, L"QWindow")) {
+                        // Publish the original procedure before Qt can call the replacement.
+                        s_origMainWndProc = (WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+                        if (s_origMainWndProc && SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)MainWndProcHook)) {
+                            s_hwndMain = hwnd;
+                            PostMessageW(hwnd, WM_YNGCHII_INIT_BTN, 0, 0);
+                        } else {
+                            s_origMainWndProc = NULL;
+                        }
                     }
                 }
             }
@@ -3891,7 +3967,7 @@ static void InitializeProxy(void) {
         InitializeStep7KernelTimerAndQoS(&actual_res);
     }
 
-    LogActiveStepSwitches("v5.6", actual_res);
+    LogActiveStepSwitches(YNGCHII_DISPLAY_VERSION, actual_res);
     HANDLE monitor = CreateThread(NULL, 0, MonitorThread, NULL, 0, NULL);
     if (monitor) CloseHandle(monitor);
     HANDLE discord = CreateThread(NULL, 0, DiscordRpcThread, NULL, 0, NULL);

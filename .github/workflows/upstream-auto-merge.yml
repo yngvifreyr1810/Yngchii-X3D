@@ -16,6 +16,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
 jobs:
   check-and-merge:
     name: Check Upstream Frizti/Fritchii & Auto-Merge
@@ -26,9 +30,9 @@ jobs:
     outputs:
       already_synced: ${{ steps.upstream_info.outputs.already_synced }}
       version_num: ${{ steps.upstream_info.outputs.version_num }}
-      target_yngchii_tag: ${{ steps.upstream_info.outputs.target_yngchii_tag }}
       latest_upstream_tag: ${{ steps.upstream_info.outputs.latest_upstream_tag }}
       merge_status: ${{ steps.do_merge.outputs.merge_status }}
+      merged_sha: ${{ steps.push_main.outputs.merged_sha }}
 
     steps:
       - name: Checkout Yngchii-X3D Repository
@@ -67,104 +71,114 @@ jobs:
           echo "version_num=$VERSION_NUM" >> $GITHUB_OUTPUT
           echo "target_yngchii_tag=$TARGET_YNGCHII_TAG" >> $GITHUB_OUTPUT
           
-          # Check if this release already exists on GitHub
-          if gh release view "$TARGET_YNGCHII_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 && [ "${{ inputs.force_sync }}" != "true" ]; then
+          # A Yngchii revision such as 5.6.1.1 also satisfies upstream 5.6.
+          SYNCED_TAG=$(gh release list --repo "${{ github.repository }}" --exclude-drafts --limit 100 --json tagName |
+            jq -r --arg base "$TARGET_YNGCHII_TAG" '
+              first(.[].tagName | select(
+                . == $base or
+                (startswith($base + ".") and (ltrimstr($base + ".") | test("^[0-9]+\\.[0-9]+$")))
+              )) // empty')
+          if [ "${{ inputs.force_sync }}" != "true" ] &&
+             { [ -n "$SYNCED_TAG" ] || git merge-base --is-ancestor "$LATEST_UPSTREAM_TAG" HEAD; }; then
             echo "already_synced=true" >> $GITHUB_OUTPUT
-            echo "Upstream tag $LATEST_UPSTREAM_TAG is already synced as $TARGET_YNGCHII_TAG on GitHub."
+            echo "Upstream tag $LATEST_UPSTREAM_TAG is already synced."
           else
             echo "already_synced=false" >> $GITHUB_OUTPUT
             echo "New upstream release detected: $LATEST_UPSTREAM_TAG -> $TARGET_YNGCHII_TAG"
           fi
 
-      - name: Perform Auto-Merge
+      - name: Merge upstream while preserving Yngchii assets
         if: steps.upstream_info.outputs.already_synced == 'false'
         id: do_merge
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream_info.outputs.latest_upstream_tag }}
+          VERSION_NUM: ${{ steps.upstream_info.outputs.version_num }}
         run: |
-          UPSTREAM_TAG="${{ steps.upstream_info.outputs.latest_upstream_tag }}"
-          VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
-          
-          echo "Attempting automated merge of $UPSTREAM_TAG into main..."
-          
-          # Try automated merge using '-X ours' strategy for conflict-prone branding/icon files
-          if git merge -X ours -m "chore(sync): auto-merge upstream $UPSTREAM_TAG into Yngchii-X3D" "$UPSTREAM_TAG"; then
-            echo "merge_status=clean" >> $GITHUB_OUTPUT
-          else
-            echo "Merge conflicts detected. Checking if conflicts are strictly within known branding files..."
-            CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
-            echo "Conflicted files: $CONFLICT_FILES"
-            
-            # If conflicts require human review, create automated PR
-            git merge --abort
-            BRANCH_NAME="sync/upstream-v${VERSION_NUM}"
-            git checkout -b "$BRANCH_NAME"
-            git merge "$UPSTREAM_TAG" || true
-            
-            git push origin "$BRANCH_NAME" --force
-            gh pr create \
-              --repo "${{ github.repository }}" \
-              --title "Sync Upstream $UPSTREAM_TAG into Yngchii-X3D" \
-              --body "Automated merge detected conflicts requiring review. Please resolve conflicts and merge to trigger the release." \
-              --base main \
-              --head "$BRANCH_NAME"
-            
-            echo "merge_status=conflict_pr_created" >> $GITHUB_OUTPUT
+          YNGCHII_HEAD=$(git rev-parse HEAD)
+          git merge --no-ff --no-commit "$UPSTREAM_TAG" ||
+            git rev-parse --verify -q MERGE_HEAD >/dev/null
+          if ! git rev-parse --verify -q MERGE_HEAD >/dev/null; then
+            echo "merge_status=up_to_date" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-      - name: Update Version Files, Changelog, and Release Notes
-        if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
+          # Preserve the fork's release assets even when upstream changed them cleanly.
+          git restore --source="$YNGCHII_HEAD" --staged --worktree -- \
+            .github/assets .github/scripts/package_windows.py .github/scripts/patch_exe_icon_inplace.py \
+            .github/scripts/sync_release.py .github/workflows/upstream-auto-merge.yml \
+            .github/workflows/release-binaries.yml dist/branding/yngchii_logo.png \
+            dist/eden.ico dist/fritchii.ico dist/lichii.ico dist/yuzu.ico src/yuzu/fritchii/whats-new.md
+
+          REVIEW_REASON=
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            git diff --name-only --diff-filter=U
+            git merge --abort
+            REVIEW_HEAD=$(git rev-parse "$UPSTREAM_TAG^{commit}")
+            REVIEW_REASON="Upstream changes conflict with Yngchii. Resolve the merge while preserving the fork's branding, proxy and UI."
+          else
+            if ! git diff --cached --quiet "$YNGCHII_HEAD" -- \
+                src/yuzu/fritchii src/yuzu/main_window.cpp src/yuzu/main.ui \
+                src/yuzu/about_dialog.cpp src/yuzu/aboutdialog.ui src/frontend_common/update_checker.cpp \
+                src/frontend_common/update_checker.h; then
+              REVIEW_REASON="Upstream changes touch the UI or updater used by the Yngchii proxy. Review compatibility before merging."
+            fi
+            git commit -m "chore(sync): merge upstream $UPSTREAM_TAG into Yngchii-X3D"
+            REVIEW_HEAD=HEAD
+          fi
+
+          if [ -n "$REVIEW_REASON" ]; then
+            BRANCH_NAME="sync/upstream-v${VERSION_NUM}"
+            OPEN_PR=$(gh pr list --head "$BRANCH_NAME" --base main --state open --json number --jq '.[0].number // empty')
+            if [ -z "$OPEN_PR" ]; then
+              git push origin "$REVIEW_HEAD:refs/heads/$BRANCH_NAME"
+              gh pr create --base main --head "$BRANCH_NAME" \
+                --title "Sync upstream $UPSTREAM_TAG into Yngchii-X3D" --body "$REVIEW_REASON"
+            fi
+            echo "merge_status=review" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "merge_status=clean" >> "$GITHUB_OUTPUT"
+
+      - name: Record upstream version
+        if: steps.do_merge.outputs.merge_status == 'clean'
         run: |
           python3 .github/scripts/sync_release.py "${{ steps.upstream_info.outputs.version_num }}" "${{ steps.upstream_info.outputs.latest_upstream_tag }}"
           git add dist/frizti_version.txt CHANGELOG.md
-          git commit --amend --no-edit
-
-      - name: Push Main and Create GitHub Official Release
-        if: steps.upstream_info.outputs.already_synced == 'false' && steps.do_merge.outputs.merge_status == 'clean'
-        run: |
-          VERSION_NUM="${{ steps.upstream_info.outputs.version_num }}"
-          TAG_NAME="${{ steps.upstream_info.outputs.target_yngchii_tag }}"
-          
-          # Push merged commits to main
-          git push origin main
-          
-          # Push tag to origin if not already there (idempotent)
-          git tag -a "$TAG_NAME" -m "Release Yngchii-X3D v${VERSION_NUM}" 2>/dev/null || true
-          git push origin "$TAG_NAME" || true
-          
-          # Create Official Release on GitHub (--latest marks it as the official primary release)
-          RELEASE_TITLE="Yngchii-X3D v${VERSION_NUM}"
-          
-          if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG_NAME already exists on GitHub, updating notes..."
-            gh release edit "$TAG_NAME" \
-              --repo "${{ github.repository }}" \
-              --title "$RELEASE_TITLE" \
-              --notes-file release_notes.md \
-              --latest
-          else
-            echo "Creating official release $TAG_NAME on ${{ github.repository }}..."
-            gh release create "$TAG_NAME" \
-              --repo "${{ github.repository }}" \
-              --title "$RELEASE_TITLE" \
-              --notes-file release_notes.md \
-              --latest
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(sync): record upstream version ${{ steps.upstream_info.outputs.version_num }}"
           fi
 
+      - name: Push merged source
+        if: steps.do_merge.outputs.merge_status == 'clean'
+        id: push_main
+        run: |
+          git push origin HEAD:main
+          echo "merged_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   package-windows:
-    name: Package Single Windows x64 Binary
+    name: Build Windows x64 candidate
     needs: check-and-merge
-    if: needs.check-and-merge.outputs.already_synced == 'false' && needs.check-and-merge.outputs.merge_status == 'clean'
+    if: needs.check-and-merge.outputs.merge_status == 'clean'
     runs-on: windows-latest
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      YNGCHII_PACKAGE_ONLY: '1'
     steps:
-      - name: Checkout Yngchii-X3D Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.check-and-merge.outputs.merged_sha }}
 
-      - name: Package and Attach Windows x64 Release Asset
+      - name: Install PE resource inspection dependency
+        run: python -m pip install pefile
+
+      - name: Package Windows x64 candidate
         run: |
-          python .github/scripts/package_windows.py "${{ needs.check-and-merge.outputs.version_num }}" "${{ needs.check-and-merge.outputs.latest_upstream_tag }}" "${{ needs.check-and-merge.outputs.target_yngchii_tag }}"
+          python .github/scripts/package_windows.py "${{ needs.check-and-merge.outputs.version_num }}" "${{ needs.check-and-merge.outputs.latest_upstream_tag }}" "yngchii-v${{ needs.check-and-merge.outputs.version_num }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yngchii-windows-x64-candidate
+          path: Yngchii-X3D-*-Windows-x64.zip
+          if-no-files-found: error

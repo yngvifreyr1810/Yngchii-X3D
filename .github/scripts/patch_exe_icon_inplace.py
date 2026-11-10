@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os, sys, pickle, struct, pefile
 
-def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None):
+def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None, *, strict=False):
     if pkl_path is None:
         cand = [
             r'D:\SB\pochita_icons.pkl',
@@ -23,6 +23,12 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None):
             if os.path.exists(c):
                 rcc_ico_path = c
                 break
+
+    if strict and (not os.path.isfile(pkl_path or "") or not os.path.isfile(rcc_ico_path or "")):
+        raise FileNotFoundError("Missing Pochita icon assets")
+    patched_icons = set()
+    patched_group = False
+    patched_rcc = False
 
     # 1. Patch Win32 PE Resources (RT_ICON & RT_GROUP_ICON)
     if pkl_path and os.path.exists(pkl_path):
@@ -51,6 +57,7 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None):
                             size_offset = sub.data.struct.get_file_offset() + 4
                             f.seek(size_offset)
                             f.write(len(new_icon).to_bytes(4, 'little'))
+                            patched_icons.add(entry.id)
                             print(f"Patched RT_ICON {entry.id} (size {len(new_icon)} at {hex(offset)})")
                             
                 elif res_type.id == 14: # RT_GROUP_ICON
@@ -59,6 +66,7 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None):
                     assert len(grp_data) == sub.data.struct.Size, f"Group icon size mismatch ({len(grp_data)} vs {sub.data.struct.Size})"
                     f.seek(offset)
                     f.write(grp_data)
+                    patched_group = True
                     print(f"Patched RT_GROUP_ICON (size {len(grp_data)} at {hex(offset)})")
         pe.close()
         print("Patched PE icon resources successfully!")
@@ -82,11 +90,15 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None):
                     f.write(struct.pack('>I', len(rcc_ico)))
                     f.write(rcc_ico)
                     f.write(b'\x00' * (old_len - len(rcc_ico)))
+                    patched_rcc = True
                     print(f"Patched Qt RCC icon at {hex(pos)} (new size {len(rcc_ico)} <= old size {old_len})!")
                 else:
                     print(f"Warning: Old RCC icon size {old_len} smaller than new {len(rcc_ico)}")
             else:
                 print("Warning: RCC ICO signature not found in exe!")
+
+    if strict and (not patched_group or patched_icons != set(icons_data) or not patched_rcc):
+        raise RuntimeError("Incomplete Pochita icon patch for this upstream executable")
 
     # 3. Patch Home List View in Yngchii-X3D.exe
     with open(exe_path, 'r+b') as f:

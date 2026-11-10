@@ -1,5 +1,5 @@
 ================================================================================
-          YNGCHII-X3D (FRITCHII v5.6) — SPECIAL COMMUNITY RELEASE
+          YNGCHII-X3D V5.6.1.1 (FRITCHII UPSTREAM V5.6) — SPECIAL COMMUNITY RELEASE
                SIMPLE HOW-TO SETUP & OPTIMIZATION GUIDE
 ================================================================================
 
@@ -12,7 +12,7 @@
 * Never share copyrighted files.                                               *
 ********************************************************************************
 
-Welcome to Yngchii-X3D (Fritchii v5.6) — A high-performance custom build
+Welcome to Yngchii-X3D V5.6.1.1 (Fritchii upstream V5.6) — A high-performance custom build
 specifically engineered for The Legend of Zelda: Ocarina of Time and Nintendo
 Switch titles on modern PC hardware!
 

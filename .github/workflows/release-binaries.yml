@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Target Release Tag (e.g. yngchii-v5.6)'
+        description: 'Target Release Tag (e.g. yngchii-v5.6.1.1)'
         required: true
         type: string
       publish_release:
         description: 'Publish/Attach binary to GitHub Release'
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -72,7 +72,8 @@ jobs:
         run: |
           $tag = "${{ inputs.tag_name }}"
           if (-not $tag) { $tag = "latest" }
-          $stage = "Yngchii-X3D-$tag"
+          $version = $tag -replace '^yngchii-v', ''
+          $stage = "Yngchii-X3D-v$version"
           New-Item -ItemType Directory -Path $stage -Force
 
           # Copy compiled output
@@ -92,10 +93,17 @@ jobs:
           }
 
           # Create zip package
-          $zipName = "Yngchii-X3D-$tag-Windows-x64.zip"
+          $zipName = "Yngchii-X3D-v$version-Windows-x64.zip"
           Compress-Archive -Path $stage -DestinationPath $zipName -Force
 
           # Upload to GitHub Release
           if ("${{ inputs.publish_release }}" -eq "true") {
-            gh release upload "$tag" "$zipName" --clobber --repo "${{ github.repository }}"
+            gh release upload "$tag" "$zipName" --repo "${{ github.repository }}"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yngchii-windows-x64-candidate
+          path: Yngchii-X3D-*-Windows-x64.zip
+          if-no-files-found: error

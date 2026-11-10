@@ -4,6 +4,7 @@ import sys
 import glob
 import shutil
 import hashlib
+import re
 import zipfile
 import subprocess
 
@@ -73,6 +74,8 @@ def main():
 
     # Copy extracted files to staging_build
     for item in os.listdir(root_dir):
+        if item.lower() == "covers":
+            continue
         s = os.path.join(root_dir, item)
         d = os.path.join(staging_build, item)
         if os.path.isdir(s):
@@ -96,16 +99,15 @@ def main():
         print("Error: Yngchii-X3D.exe not found in extracted files!")
         sys.exit(1)
 
-    # 1.5. Patch Pochita icon in-place into Yngchii-X3D.exe
+    # 1.5. Require the fork's branding before preparing an artifact.
     assets_dir = os.path.join(".github", "assets")
     icon_pkl = os.path.join(assets_dir, "pochita_icons.pkl")
-    if os.path.exists(icon_pkl):
-        try:
-            sys.path.insert(0, os.path.join(".github", "scripts"))
-            from patch_exe_icon_inplace import patch_exe_icon
-            patch_exe_icon(exe_target, icon_pkl)
-        except Exception as e:
-            print(f"Warning: Failed to patch Pochita icon: {e}")
+    rcc_ico = os.path.join(assets_dir, "pochita_rcc.ico")
+    from patch_exe_icon_inplace import patch_exe_icon
+    exe_size = os.path.getsize(exe_target)
+    patch_exe_icon(exe_target, icon_pkl, rcc_ico, strict=True)
+    if os.path.getsize(exe_target) != exe_size:
+        raise RuntimeError("Icon patch changed the executable size")
 
     # 2. Compile version.dll with dynamic version string
     assets_dir = os.path.join(".github", "assets")
@@ -115,21 +117,13 @@ def main():
 
     if os.path.exists(c_src_path) and os.path.exists(def_path):
         print(f"Compiling version.dll for v{version_num}...")
-        with open(c_src_path, "r", encoding="utf-8", errors="ignore") as f:
-            c_code = f.read()
-
-        c_code = c_code.replace("v5.6", f"v{version_num}")
-        c_code = c_code.replace("5.6", f"{version_num}")
-        temp_c = "temp_version_proxy.c"
-        with open(temp_c, "w", encoding="utf-8") as f:
-            f.write(c_code)
-
         # Compile the C++ proxy with llvm-mingw when available.
         compiler = shutil.which("x86_64-w64-mingw32-clang++") or shutil.which("clang++")
         compile_cmd = [
             compiler, "--target=x86_64-w64-windows-gnu", "-fuse-ld=lld",
             "-x", "c++", "-shared", "-O3", "-static", "-march=x86-64",
-            temp_c, "-x", "none", def_path, "-o", dll_out,
+            f'-DYNGCHII_VERSION="{version_num}"',
+            c_src_path, "-x", "none", def_path, "-o", dll_out,
             "-Wl,--delayload=gdiplus.dll,--no-insert-timestamp",
             "-luser32", "-lkernel32", "-lgdi32", "-lwinmm", "-ladvapi32",
             "-lgdiplus", "-ldelayimp", "-lshlwapi", "-lole32",
@@ -142,24 +136,28 @@ def main():
             print("version.dll compiled successfully!")
         else:
             error = comp_res.stderr.strip() if comp_res else "clang++ unavailable"
-            print(f"Warning: Compilation failed ({error}). Checking fallback.")
             fallback_dll = os.path.join(assets_dir, "version.dll")
-            if os.path.exists(fallback_dll):
-                shutil.copy2(fallback_dll, dll_out)
-                print("Copied fallback version.dll.")
-    else:
-        fallback_dll = os.path.join(assets_dir, "version.dll")
-        if os.path.exists(fallback_dll):
+            with open(c_src_path, "r", encoding="utf-8") as f:
+                default = re.search(r'^#define YNGCHII_VERSION "([^"]+)"$', f.read(), re.MULTILINE)
+            if not default or default[1] != version_num or not os.path.isfile(fallback_dll):
+                raise RuntimeError(f"No version.dll for V{version_num}: {error}")
             shutil.copy2(fallback_dll, dll_out)
-            print("Copied fallback version.dll.")
+            print(f"Using the checked-in version.dll for V{version_num}.")
+    else:
+        raise FileNotFoundError("Missing Yngchii proxy source or exports")
+
+    # CreateProcessW validates the staged PE without starting its UI.
+    probe = subprocess.Popen([os.path.abspath(exe_target)], cwd=staging_build, creationflags=4)
+    probe.terminate()
+    probe.wait(timeout=10)
 
     # 3. Copy documentation & switches
-    for doc in ["README.md", "HUONG_DAN_SU_DUNG.md", "HUONG DAN SU DUNG (TIENG VIET).txt", "OOTR SIMPLE HOW TO GUIDE FOR V5.txt", "nx2_switches.txt"]:
+    for doc in ["README.md", "HUONG_DAN_SU_DUNG.md", "HUONG DAN SU DUNG (TIENG VIET).txt", "OOTR SIMPLE HOW TO GUIDE FOR V5.txt", "nx2_switches.txt", "whats-new.md"]:
         doc_src = os.path.join(assets_dir, doc)
         if os.path.exists(doc_src):
             with open(doc_src, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            content = content.replace("v5.6", f"v{version_num}").replace("5.6", f"{version_num}")
+            content = content.replace("V5.6.1.1", f"V{version_num}")
             with open(os.path.join(staging_build, doc), "w", encoding="utf-8") as f:
                 f.write(content)
 
@@ -170,6 +168,7 @@ def main():
         os.remove(zip_filename)
 
     with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        zf.mkdir(f"{staging_build}/covers/")
         for root, dirs, files in os.walk(staging_build):
             for f in files:
                 fp = os.path.join(root, f)
@@ -181,12 +180,14 @@ def main():
     sha256 = get_sha256(zip_filename)
     print(f"Packaged {zip_filename} ({zip_size} bytes, SHA-256: {sha256})")
 
+    if os.environ.get("YNGCHII_PACKAGE_ONLY") == "1":
+        return 0
+
     # 5. Upload asset to GitHub Release
     print(f"Uploading {zip_filename} to release {target_tag}...")
     up_cmd = [
         "gh", "release", "upload", target_tag, zip_filename,
         "--repo", repo,
-        "--clobber"
     ]
     up_res = subprocess.run(up_cmd, capture_output=True, text=True, check=False)
     if up_res.returncode == 0:
