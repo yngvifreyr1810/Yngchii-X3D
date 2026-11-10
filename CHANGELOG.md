@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.7.0] - 2026-11-10
+
+### Upstream Fritchii v5.7 Synchronizations
+- 52317bf0e5 Fritchii v5.7: in-app notes
+- f3ba26cfe4 Fix NX metadata editing and restore original icons
+- d00273c78f Link nxformat 1.0.2 statically
+- 330c1e4bb5 Load gamecard tickets first and log firmware fallback
+- 2f4c1d100b Keep cart firmware when converting XCI to NX
+- c1c1ccbc17 Update nxformat to 1.0.1 (#1078)
+- 5d1eb38196 Add support for the NX archive format (#866 with review fixes) (#923)
+- 5f8b265ecf Fritchii v5.7: version and settings revision 7
+- 5b970411a0 Fritchii v5.7 defaults: EXP49 on, texture cache ceiling 7680 MiB, JIT warm-up on
+- 6a29460f5b Zero-page pass: wait out bulk mapping, back off to 5 minutes when it trims little
+- 0f0e8470c0 Zero-page pass: log its phases (working set query, page reads, VirtualUnlock runs)
+- 25892ea154 vulkan: one command and one pair of barriers for a run of in-order uploads (port of zortos293/Lichii#1245, EXP62)
+- 1b65dfe83e vulkan: EXP42=2's image pool holds up to 1.5 GiB
+- 3c09b12762 vulkan: EXP42=2 also pools dedicated-allocation render targets
+- 28a71116d8 Fritchii: EDEN_NX2_READ_THROTTLE=0 built in (no 40 MB/s game file read pacing)
+- e1c7514de7 fsp: EDEN_NX2_READ_THROTTLE=0 turns the 40 MB/s game file read pacing off
+- c43b29327f texture_cache: keep the collector's thresholds within the host's commit (port of zortos293/Lichii#1210)
+- ad4b2efe25 Frame dump: capture_frame arms it mid-game (no boot switch)
+- ad94953dbe nvdrv: retain the process while queued backing refresh runs
+- 709c7ff672 nvdrv: always refresh stale device backing
+- 506a5ca598 nx2: release the device range of memory that sub 102 destroys
+- f84b9056cb nvdrv: map a reused Switch 2 device range to the CPU range's current pages
+- 45e164c155 nx2: unmap every GPU range into memory that sub 102 destroys (#1199)
+- 3d2bcbb898 Fight counters: front waits by site, cache lock waits by thread, image shapes made
+- a85e7344b5 Hitch log: 60 lines a minute (20 hid a 740 ms first load)
+- 7147facb77 JIT warm: at most 20 ms of every 100 ms per core
+- b0d0ff43f7 EDEN_NX2_JIT_WARM=1: idle cores compile code other cores compiled (off by default)
+- 3ae8122cf0 Hitch log: repeat compiles across cores, per-thread CPU, map/unmap/protect split, zero-fill
+- dde155e33e Hitch log: recompiling game code, and the process's user/kernel CPU time
+- 68b9815db4 EDEN_NX2_ZERO_TRIM=0: no zero-page passes (A/B switch)
+- 6c4e3eed1b Hitch log: game file read throttle, file reads, host map/protect; debug write_memory
+- 5885850c68 shader: shadow high registers of SHF with a uniform shift amount
+- 60377e0804 shader: shadow high registers of seven more instruction forms
+- dfac3c45ea shader: shadow high registers of IMAD with a uniform multiplier (#279)
+- 169bb1f198 Hitch log: one line per present gap over 50 ms with what held the game up
+- 4429e53ca5 OoT high refresh: own cave at main+0x3C46E00, Dark's routine stays
+
+### Yngchii-X3D Optimizations Maintained
+- Dedicated AMD Ryzen 3D V-Cache thread core pinning (GPUFront Core 1, GPUBack Core 2).
+- Hardware-gated AVX-512 dirty page scan with clean AVX2 fallback.
+- In-place auto-updater targeting Yngchii-X3D releases with pre-release safety.
+- Selective NVIDIA Overlay & Game Filter bypass.
+
+---
+
+
 ## [5.6.0] - 2026-11-10
 
 ### Upstream Fritchii v5.6 Synchronizations
