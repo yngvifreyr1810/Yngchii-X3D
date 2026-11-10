@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os, sys, pickle, struct, pefile
 
-def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None, *, strict=False):
+def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None, *, strict=False, stock_rcc=None):
     if pkl_path is None:
         cand = [
             r'D:\SB\pochita_icons.pkl',
@@ -26,6 +26,8 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None, *, strict=False):
 
     if strict and (not os.path.isfile(pkl_path or "") or not os.path.isfile(rcc_ico_path or "")):
         raise FileNotFoundError("Missing Pochita icon assets")
+    if strict and not stock_rcc:
+        raise ValueError("The upstream Qt icon is required for strict patching")
     patched_icons = set()
     patched_group = False
     patched_rcc = False
@@ -78,9 +80,13 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None, *, strict=False):
         
         with open(exe_path, 'r+b') as f:
             exe_data = f.read()
-            # ICO header signature: 00 00 01 00 07 00 10 10 (7 images, first is 16x16)
-            ico_sig = b'\x00\x00\x01\x00\x07\x00\x10\x10'
-            pos = exe_data.find(ico_sig)
+            if stock_rcc:
+                stock_resource = struct.pack('>I', len(stock_rcc)) + stock_rcc
+                if exe_data.count(stock_resource) != 1:
+                    raise RuntimeError("Could not uniquely identify the upstream Qt icon")
+                pos = exe_data.index(stock_resource) + 4
+            else:
+                pos = exe_data.find(b'\x00\x00\x01\x00\x07\x00\x10\x10')
             if pos != -1:
                 # 4 bytes before pos is big-endian length in RCC
                 len_offset = pos - 4
@@ -129,7 +135,7 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None, *, strict=False):
             f.write(bytes.fromhex('c7442420e8030000'))
             print("Patched tile title elide width to 1000px!")
 
-    print(f"Successfully patched all icons & list view into {exe_path}!")
+    print(f"Finished icon patching and checked the V5.6 list-view offsets in {exe_path}")
 
 if __name__ == '__main__':
     target = sys.argv[1] if len(sys.argv) > 1 else r'D:\SB\Yngchii-v5.6\Yngchii-X3D.exe'

@@ -3617,7 +3617,6 @@ static DWORD WINAPI DiscordRpcThread(LPVOID lpParam) {
             time_t act_time = s_is_in_game ? (game_start ? game_start : session_start) : session_start;
 
             char details[256];
-            char state[256];
 
             if (s_is_in_game) {
                 if (s_game_title[0] != '\0') {
@@ -3625,24 +3624,17 @@ static DWORD WINAPI DiscordRpcThread(LPVOID lpParam) {
                 } else {
                     snprintf(details, sizeof(details), "Playing in In-Game Session");
                 }
-                snprintf(state, sizeof(state), "⚡ Yngvi's X3D Optimize: Active");
             } else {
                 snprintf(details, sizeof(details), "Idle in Home Menu");
-                snprintf(state, sizeof(state), "⚡ Yngvi's X3D Optimize: Ready");
             }
 
+            // Let Discord use the application's icon from the Developer Portal.
             snprintf(payload, sizeof(payload),
                 "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%lu,\"activity\":{"
                 "\"details\":\"%s\","
-                "\"state\":\"%s\","
-                "\"timestamps\":{\"start\":%lld},"
-                "\"assets\":{"
-                "\"large_image\":\"pochita\","
-                "\"large_text\":\"Yngchii-X3D " YNGCHII_DISPLAY_VERSION "\","
-                "\"small_image\":\"pochita\","
-                "\"small_text\":\"Ryzen X3D Edition\""
-                "}}},\"nonce\":\"1\"}",
-                myPid, details, state, (long long)act_time);
+                "\"timestamps\":{\"start\":%lld}"
+                "}},\"nonce\":\"1\"}",
+                myPid, details, (long long)act_time);
 
             uint32_t op = 1;
             uint32_t len = (uint32_t)strlen(payload);
