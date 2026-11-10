@@ -545,6 +545,12 @@ typedef void* (*pfn_qitem_data)(void* item_this, void* ret_qvariant, int role);
 typedef void* (*pfn_qvariant_toString)(const void* qvariant_this, void* ret_qstring);
 typedef void (*pfn_qvariant_dtor)(void* qvariant_ptr);
 
+typedef void* (*pfn_sourceModel)(const void* proxy_this);
+typedef uint64_t (*pfn_toULongLong)(const void* qvariant_this, BOOL* ok);
+typedef void (*pfn_layout_item_setAlign)(void* layout_item, int alignment);
+typedef BOOL (*pfn_layout_setAlign_widget)(void* layout, void* widget, int alignment);
+typedef void (*pfn_setSizePolicy)(void* widget_this, int h_policy, int v_policy);
+
 // QScrollArea
 typedef void* (*pfn_scroll_ctor)(void* this_ptr, void* parent);
 typedef void (*pfn_setWidget)(void* this_ptr, void* widget);
@@ -625,6 +631,12 @@ static pfn_qitem_data s_pfn_qitem_data = NULL;
 static pfn_qvariant_toString s_pfn_qvariant_toString = NULL;
 static pfn_qvariant_dtor s_pfn_qvariant_dtor = NULL;
 
+static pfn_sourceModel s_pfn_sourceModel = NULL;
+static pfn_toULongLong s_pfn_toULongLong = NULL;
+static pfn_layout_item_setAlign s_pfn_layout_item_setAlign = NULL;
+static pfn_layout_setAlign_widget s_pfn_layout_setAlign_widget = NULL;
+static pfn_setSizePolicy s_pfn_setSizePolicy = NULL;
+
 static pfn_scroll_ctor s_pfn_scroll_ctor = NULL;
 static pfn_setWidget s_pfn_setWidget = NULL;
 static pfn_setWidgetResizable s_pfn_setWidgetResizable = NULL;
@@ -702,13 +714,13 @@ static void ParseGameItemTitleAndId(char* raw_text, char* out_title, size_t titl
     }
 }
 
-static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
+static void HelperGetItemRoleText(void* item, int role, char* out_buf, size_t buf_size) {
     if (!item || !s_pfn_qitem_data || !s_pfn_qvariant_toString || !s_pfn_toUtf8 || !s_pfn_constData) {
         if (out_buf && buf_size > 0) out_buf[0] = '\0';
         return;
     }
     char qvar[64] = {0};
-    s_pfn_qitem_data(item, qvar, 0); // Qt::DisplayRole = 0
+    s_pfn_qitem_data(item, qvar, role);
     char qstr[32] = {0};
     s_pfn_qvariant_toString(qvar, qstr);
     char qba[32] = {0};
@@ -725,10 +737,45 @@ static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
     if (s_pfn_qvariant_dtor) s_pfn_qvariant_dtor(qvar);
 }
 
+static uint64_t HelperGetItemRoleULongLong(void* item, int role) {
+    if (!item || !s_pfn_qitem_data || !s_pfn_toULongLong) return 0;
+    char qvar[64] = {0};
+    s_pfn_qitem_data(item, qvar, role);
+    uint64_t val = s_pfn_toULongLong(qvar, NULL);
+    if (s_pfn_qvariant_dtor) s_pfn_qvariant_dtor(qvar);
+    return val;
+}
+
+static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
+    HelperGetItemRoleText(item, 0, out_buf, buf_size);
+}
+
+static void LogDebugMeta(const char* fmt, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    FILE* f = fopen("D:\\SB\\debug_meta.log", "a");
+    if (f) {
+        fprintf(f, "%s\n", buf);
+        fclose(f);
+    }
+}
+
 static void PopulateGameMeta(void* tree_view) {
     if (!tree_view || !s_pfn_view_model || !s_pfn_model_root) return;
     void* model = s_pfn_view_model(tree_view);
-    if (!model || !s_pfn_inherits(model, "QStandardItemModel")) return;
+    if (!model) return;
+
+    // Fix 1.1: Unwrap proxy models (QSortFilterProxyModel / GamelistSearchFilterProxyModel)
+    int unwrap_depth = 0;
+    while (model && s_pfn_inherits && s_pfn_inherits(model, "QAbstractProxyModel") && s_pfn_sourceModel && unwrap_depth++ < 8) {
+        model = s_pfn_sourceModel(model);
+    }
+    LogDebugMeta("PopulateGameMeta: model=%p, unwrapped=%p, inherits_std=%d", s_pfn_view_model(tree_view), model, s_pfn_inherits(model, "QStandardItemModel"));
+    if (!model || !s_pfn_inherits || !s_pfn_inherits(model, "QStandardItemModel")) return;
+
     void* root = s_pfn_model_root(model);
     if (!root || !s_pfn_qitem_rowCount || !s_pfn_qitem_child) return;
 
@@ -747,29 +794,128 @@ static void PopulateGameMeta(void* tree_view) {
             for (int sub = 0; sub < sub_rows && new_count < 128; sub++) {
                 void* game_item = s_pfn_qitem_child(top_item, sub, 0);
                 if (!game_item) continue;
-                char raw_title[256] = {0};
-                HelperGetItemText(game_item, raw_title, sizeof(raw_title));
-                if (raw_title[0] != '\0') {
-                    GameMetaCache* entry = &temp_meta[new_count++];
-                    ParseGameItemTitleAndId(raw_title, entry->title, sizeof(entry->title), entry->program_id, sizeof(entry->program_id));
-                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 1), entry->file_type, sizeof(entry->file_type));
-                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 2), entry->file_size, sizeof(entry->file_size));
-                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 3), entry->play_time, sizeof(entry->play_time));
-                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 4), entry->add_ons, sizeof(entry->add_ons));
+
+                GameMetaCache* entry = &temp_meta[new_count];
+                memset(entry, 0, sizeof(GameMetaCache));
+
+                // 1. Title from TitleRole (259)
+                HelperGetItemRoleText(game_item, 259, entry->title, sizeof(entry->title));
+                if (entry->title[0] == '\0') {
+                    char full_p[MAX_PATH] = {0};
+                    HelperGetItemRoleText(game_item, 260, full_p, sizeof(full_p));
+                    if (full_p[0] != '\0') {
+                        char* fname = strrchr(full_p, '\\');
+                        if (!fname) fname = strrchr(full_p, '/');
+                        fname = fname ? fname + 1 : full_p;
+                        char* dot = strrchr(fname, '.');
+                        if (dot) *dot = '\0';
+                        strncpy(entry->title, fname, sizeof(entry->title) - 1);
+                    }
+                }
+                if (entry->title[0] == '\0') {
+                    char raw_t[256] = {0};
+                    HelperGetItemText(game_item, raw_t, sizeof(raw_t));
+                    ParseGameItemTitleAndId(raw_t, entry->title, sizeof(entry->title), entry->program_id, sizeof(entry->program_id));
+                }
+
+                // 2. Program ID from ProgramIdRole (261)
+                if (entry->program_id[0] == '\0') {
+                    uint64_t pid = HelperGetItemRoleULongLong(game_item, 261);
+                    if (pid != 0) {
+                        snprintf(entry->program_id, sizeof(entry->program_id), "%016llX", pid);
+                    }
+                }
+
+                // 3. File Type from FileTypeRole (262)
+                HelperGetItemRoleText(game_item, 262, entry->file_type, sizeof(entry->file_type));
+
+                // 4. Sibling columns (1 .. 6)
+                for (int col = 1; col <= 6; col++) {
+                    void* sib = s_pfn_qitem_child(top_item, sub, col);
+                    if (!sib) continue;
+                    char sib_text[128] = {0};
+                    HelperGetItemRoleText(sib, 0, sib_text, sizeof(sib_text));
+                    if (sib_text[0] == '\0') continue;
+
+                    if (col == 1 && entry->file_type[0] == '\0') {
+                        strncpy(entry->file_type, sib_text, sizeof(entry->file_type) - 1);
+                    } else if (col == 2 && entry->file_size[0] == '\0') {
+                        strncpy(entry->file_size, sib_text, sizeof(entry->file_size) - 1);
+                    } else if (col == 3 && entry->play_time[0] == '\0') {
+                        strncpy(entry->play_time, sib_text, sizeof(entry->play_time) - 1);
+                    } else if (col == 4 && entry->add_ons[0] == '\0') {
+                        strncpy(entry->add_ons, sib_text, sizeof(entry->add_ons) - 1);
+                    } else if ((strstr(sib_text, "GB") || strstr(sib_text, "MB") || strstr(sib_text, "KB")) && entry->file_size[0] == '\0') {
+                        strncpy(entry->file_size, sib_text, sizeof(entry->file_size) - 1);
+                    } else if ((strchr(sib_text, ':') || strstr(sib_text, "Never") || strstr(sib_text, "Played") || strstr(sib_text, "Chưa")) && entry->play_time[0] == '\0') {
+                        strncpy(entry->play_time, sib_text, sizeof(entry->play_time) - 1);
+                    } else if ((strstr(sib_text, "Update") || strstr(sib_text, "DLC") || strstr(sib_text, "Patch")) && entry->add_ons[0] == '\0') {
+                        strncpy(entry->add_ons, sib_text, sizeof(entry->add_ons) - 1);
+                    }
+                }
+
+                if (entry->title[0] != '\0') {
+                    LogDebugMeta("Found Game [%d]: title='%s', pid='%s', ftype='%s', size='%s', play='%s', add_ons='%s'",
+                                 new_count, entry->title, entry->program_id, entry->file_type, entry->file_size, entry->play_time, entry->add_ons);
+                    new_count++;
                 }
             }
         } else {
-            char raw_title[256] = {0};
-            HelperGetItemText(top_item, raw_title, sizeof(raw_title));
-            if (raw_title[0] != '\0') {
-                GameMetaCache* entry = &temp_meta[new_count++];
-                ParseGameItemTitleAndId(raw_title, entry->title, sizeof(entry->title), entry->program_id, sizeof(entry->program_id));
-                if (s_pfn_model_item) {
-                    HelperGetItemText(s_pfn_model_item(model, r, 1), entry->file_type, sizeof(entry->file_type));
-                    HelperGetItemText(s_pfn_model_item(model, r, 2), entry->file_size, sizeof(entry->file_size));
-                    HelperGetItemText(s_pfn_model_item(model, r, 3), entry->play_time, sizeof(entry->play_time));
-                    HelperGetItemText(s_pfn_model_item(model, r, 4), entry->add_ons, sizeof(entry->add_ons));
+            GameMetaCache* entry = &temp_meta[new_count];
+            memset(entry, 0, sizeof(GameMetaCache));
+
+            HelperGetItemRoleText(top_item, 259, entry->title, sizeof(entry->title));
+            if (entry->title[0] == '\0') {
+                char full_p[MAX_PATH] = {0};
+                HelperGetItemRoleText(top_item, 260, full_p, sizeof(full_p));
+                if (full_p[0] != '\0') {
+                    char* fname = strrchr(full_p, '\\');
+                    if (!fname) fname = strrchr(full_p, '/');
+                    fname = fname ? fname + 1 : full_p;
+                    char* dot = strrchr(fname, '.');
+                    if (dot) *dot = '\0';
+                    strncpy(entry->title, fname, sizeof(entry->title) - 1);
                 }
+            }
+            if (entry->title[0] == '\0') {
+                char raw_t[256] = {0};
+                HelperGetItemText(top_item, raw_t, sizeof(raw_t));
+                ParseGameItemTitleAndId(raw_t, entry->title, sizeof(entry->title), entry->program_id, sizeof(entry->program_id));
+            }
+
+            if (entry->program_id[0] == '\0') {
+                uint64_t pid = HelperGetItemRoleULongLong(top_item, 261);
+                if (pid != 0) {
+                    snprintf(entry->program_id, sizeof(entry->program_id), "%016llX", pid);
+                }
+            }
+            HelperGetItemRoleText(top_item, 262, entry->file_type, sizeof(entry->file_type));
+
+            if (s_pfn_model_item) {
+                for (int col = 1; col <= 6; col++) {
+                    void* sib = s_pfn_model_item(model, r, col);
+                    if (!sib) continue;
+                    char sib_text[128] = {0};
+                    HelperGetItemRoleText(sib, 0, sib_text, sizeof(sib_text));
+                    if (sib_text[0] == '\0') continue;
+
+                    if ((strstr(sib_text, "GB") || strstr(sib_text, "MB") || strstr(sib_text, "KB")) && entry->file_size[0] == '\0') {
+                        strncpy(entry->file_size, sib_text, sizeof(entry->file_size) - 1);
+                    }
+                    else if ((strchr(sib_text, ':') || strstr(sib_text, "Never") || strstr(sib_text, "Played") || strstr(sib_text, "Chưa")) && entry->play_time[0] == '\0') {
+                        strncpy(entry->play_time, sib_text, sizeof(entry->play_time) - 1);
+                    }
+                    else if ((strstr(sib_text, "Update") || strstr(sib_text, "DLC") || strstr(sib_text, "Patch")) && entry->add_ons[0] == '\0') {
+                        strncpy(entry->add_ons, sib_text, sizeof(entry->add_ons) - 1);
+                    }
+                    else if ((strcmp(sib_text, "NSP") == 0 || strcmp(sib_text, "XCI") == 0 || strcmp(sib_text, "NUP") == 0) && entry->file_type[0] == '\0') {
+                        strncpy(entry->file_type, sib_text, sizeof(entry->file_type) - 1);
+                    }
+                }
+            }
+
+            if (entry->title[0] != '\0') {
+                new_count++;
             }
         }
     }
@@ -845,6 +991,12 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         s_pfn_view_model = (pfn_view_model)GetProcAddress(hWidgets, "?model@QAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ");
         s_pfn_qvariant_toString = (pfn_qvariant_toString)GetProcAddress(hCore, "?toString@QVariant@@QEBA?AVQString@@XZ");
         s_pfn_qvariant_dtor = (pfn_qvariant_dtor)GetProcAddress(hCore, "??1QVariant@@QEAA@XZ");
+
+        s_pfn_sourceModel = (pfn_sourceModel)GetProcAddress(hCore, "?sourceModel@QAbstractProxyModel@@QEBAPEAVQAbstractItemModel@@XZ");
+        s_pfn_toULongLong = (pfn_toULongLong)GetProcAddress(hCore, "?toULongLong@QVariant@@QEBA_KPEA_N@Z");
+        s_pfn_layout_item_setAlign = (pfn_layout_item_setAlign)GetProcAddress(hWidgets, "?setAlignment@QLayoutItem@@QEAAXV?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
+        s_pfn_layout_setAlign_widget = (pfn_layout_setAlign_widget)GetProcAddress(hWidgets, "?setAlignment@QLayout@@QEAA_NPEAVQWidget@@V?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
+        s_pfn_setSizePolicy = (pfn_setSizePolicy)GetProcAddress(hWidgets, "?setSizePolicy@QWidget@@QEAAXW4Policy@QSizePolicy@@0@Z");
 
         s_pfn_scroll_ctor = (pfn_scroll_ctor)GetProcAddress(hWidgets, "??0QScrollArea@@QEAA@PEAVQWidget@@@Z");
         s_pfn_setWidget = (pfn_setWidget)GetProcAddress(hWidgets, "?setWidget@QScrollArea@@QEAAXPEAVQWidget@@@Z");
@@ -938,6 +1090,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                             s_pfn_scroll_ctor(scroll, page);
                             s_pfn_setWidget(scroll, parent);
                             if (s_pfn_setWidgetResizable) s_pfn_setWidgetResizable(scroll, 1);
+                            if (s_pfn_setSizePolicy) s_pfn_setSizePolicy(scroll, 7, 7); // Expanding, Expanding
                             if (s_pfn_setFrameShape) s_pfn_setFrameShape(scroll, 0); // NoFrame
                             if (s_pfn_setHScrollBarPolicy) s_pfn_setHScrollBarPolicy(scroll, 1); // ScrollBarAlwaysOff
                             if (s_pfn_setVScrollBarPolicy) s_pfn_setVScrollBarPolicy(scroll, 0); // ScrollBarAsNeeded
@@ -965,9 +1118,12 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                             }
 
                             if (s_pfn_insertWidget) {
-                                s_pfn_insertWidget(page_layout, 2, scroll, 1, 0);
+                                s_pfn_insertWidget(page_layout, 2, scroll, 100, 0); // stretch = 100 to fill vertical space!
                             } else if (s_pfn_addWidget) {
-                                s_pfn_addWidget(page_layout, scroll, 1, 0);
+                                s_pfn_addWidget(page_layout, scroll, 100, 0);
+                            }
+                            if (page_layout && s_pfn_setContentsMargins) {
+                                s_pfn_setContentsMargins(page_layout, 48, 20, 48, 12);
                             }
 
                             if (s_pfn_show) {
@@ -991,6 +1147,15 @@ static void TriggerLiveQtWidgetTranslation(int force) {
 
                 if (layout && s_pfn_setDirection) {
                     s_pfn_setDirection(layout, s_modern_home_list ? 2 : 0);
+                    if (s_modern_home_list) {
+                        // Fix 2: Clear Qt::AlignLeft so cards stretch to 100% full width
+                        if (s_pfn_layout_item_setAlign) {
+                            s_pfn_layout_item_setAlign((char*)layout + 16, 0);
+                        }
+                        if (s_pfn_setContentsMargins) {
+                            s_pfn_setContentsMargins(layout, 0, 0, 10, 0);
+                        }
+                    }
                 }
 
                 // 2. Read tile title from toolTip
@@ -1143,7 +1308,16 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         }
                     }
 
-                    // Card button sizing
+                    // Card button sizing - 100% full width
+                    if (s_pfn_setSizePolicy) {
+                        s_pfn_setSizePolicy(w, 7, 0); // Expanding = 7, Fixed = 0
+                        if (parent) s_pfn_setSizePolicy(parent, 7, 5); // Expanding, Preferred
+                    }
+                    if (parent && s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(parent, 0);
+                    if (parent && s_pfn_setMaximumWidth) s_pfn_setMaximumWidth(parent, 16777215);
+                    if (layout && s_pfn_layout_setAlign_widget) {
+                        s_pfn_layout_setAlign_widget(layout, w, 0);
+                    }
                     if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 2); // ToolButtonTextBesideIcon
                     if (s_pfn_setIconSize) {
                         struct { int w, h; } sz = {80, 80};
@@ -1151,7 +1325,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                     }
                     if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 104);
                     if (s_pfn_setFixedHeight) s_pfn_setFixedHeight(w, 104);
-                    if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 720);
+                    if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 0); // Allow full stretching
                     if (s_pfn_setMaximumWidth) s_pfn_setMaximumWidth(w, 16777215);
 
                     // Clear button text
