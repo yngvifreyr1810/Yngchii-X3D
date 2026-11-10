@@ -499,6 +499,132 @@ static int s_drag_moved = 0;
 static int s_drag_start_y = 0;
 static float s_drag_start_pos = 0.0f;
 
+// Typedefs for Qt6 dynamic introspection
+typedef void* (*pfn_allWidgets)(void* ret_qlist);
+typedef BOOL (*pfn_inherits)(void* this_ptr, const char* className);
+typedef void* (*pfn_objectName)(const void* this_ptr, void* ret_qstr);
+typedef void* (*pfn_parentWidget)(void* this_ptr);
+typedef void* (*pfn_layout)(void* this_ptr);
+typedef void (*pfn_setDirection)(void* layout_ptr, int dir);
+typedef void (*pfn_setToolButtonStyle)(void* this_ptr, int style);
+typedef void (*pfn_setIconSize)(void* this_ptr, const void* qsize_ptr);
+typedef void (*pfn_setMinimumHeight)(void* this_ptr, int h);
+typedef void (*pfn_setMinimumWidth)(void* this_ptr, int w);
+typedef void (*pfn_setMaximumWidth)(void* this_ptr, int w);
+typedef int (*pfn_minimumWidth)(const void* this_ptr);
+typedef void* (*pfn_toolTip)(const void* this_ptr, void* ret_qstr);
+typedef void (*pfn_setStyleSheet)(void* this_ptr, const void* qstr_ptr);
+
+typedef void* (*pfn_pixmapFromWinHICON)(void* ret_qpixmap, HICON hIcon);
+typedef void (*pfn_setPixmap)(void* this_ptr, const void* qpixmap_ptr);
+typedef void (*pfn_dtor_pixmap)(void* qpixmap_ptr);
+typedef void* (*pfn_fromUtf8_str)(void* ret_qstr, const char* str, int64_t size);
+typedef void* (*pfn_toUtf8_fn)(const void* qstr_this, void* ret_qba);
+typedef const char* (*pfn_constData_fn)(const void* qba_this);
+typedef void (*pfn_str_dtor_fn)(void* q_ptr);
+typedef void (*pfn_qba_dtor_fn)(void* qba_ptr);
+
+typedef void* (*pfn_get_text)(void* this_ptr, void* ret_qstr);
+typedef void (*pfn_set_text)(void* this_ptr, const void* qstr_ptr);
+
+typedef int (*pfn_tab_count)(void* this_ptr);
+typedef void* (*pfn_tab_text)(void* this_ptr, void* ret_qstr, int index);
+typedef void (*pfn_tab_setText)(void* this_ptr, int index, const void* qstr_ptr);
+
+typedef void* (*pfn_actions)(void* this_ptr, void* ret_qlist);
+typedef void* (*pfn_act_text)(void* this_ptr, void* ret_qstr);
+typedef void (*pfn_act_setText)(void* this_ptr, const void* qstr_ptr);
+
+typedef void* (*pfn_view_model)(void* view_this);
+typedef void* (*pfn_model_root)(void* model_this);
+typedef void* (*pfn_model_item)(void* model_this, int row, int column);
+typedef int (*pfn_qitem_rowCount)(void* item_this);
+typedef void* (*pfn_qitem_child)(void* item_this, int row, int column);
+typedef void* (*pfn_qitem_data)(void* item_this, void* ret_qvariant, int role);
+typedef void* (*pfn_qvariant_toString)(const void* qvariant_this, void* ret_qstring);
+typedef void (*pfn_qvariant_dtor)(void* qvariant_ptr);
+
+static pfn_allWidgets s_pfn_allWidgets = NULL;
+static pfn_inherits s_pfn_inherits = NULL;
+static pfn_objectName s_pfn_objectName = NULL;
+static pfn_parentWidget s_pfn_parentWidget = NULL;
+static pfn_layout s_pfn_layout = NULL;
+static pfn_setDirection s_pfn_setDirection = NULL;
+static pfn_setToolButtonStyle s_pfn_setToolButtonStyle = NULL;
+static pfn_setIconSize s_pfn_setIconSize = NULL;
+static pfn_setMinimumHeight s_pfn_setMinimumHeight = NULL;
+static pfn_setMinimumWidth s_pfn_setMinimumWidth = NULL;
+static pfn_setMaximumWidth s_pfn_setMaximumWidth = NULL;
+static pfn_minimumWidth s_pfn_minimumWidth = NULL;
+static pfn_toolTip s_pfn_toolTip = NULL;
+static pfn_setStyleSheet s_pfn_setStyleSheet = NULL;
+static pfn_pixmapFromWinHICON s_pfn_pixmapFromWinHICON = NULL;
+static pfn_setPixmap s_pfn_setPixmap = NULL;
+static pfn_dtor_pixmap s_pfn_dtor_pixmap = NULL;
+static pfn_fromUtf8_str s_pfn_fromUtf8_str = NULL;
+static pfn_toUtf8_fn s_pfn_toUtf8 = NULL;
+static pfn_constData_fn s_pfn_constData = NULL;
+static pfn_str_dtor_fn s_pfn_dtor = NULL;
+static pfn_qba_dtor_fn s_pfn_qba_dtor = NULL;
+
+static pfn_get_text s_pfn_btn_text = NULL;
+static pfn_set_text s_pfn_btn_setText = NULL;
+static pfn_get_text s_pfn_lbl_text = NULL;
+static pfn_set_text s_pfn_lbl_setText = NULL;
+static pfn_get_text s_pfn_gb_title = NULL;
+static pfn_set_text s_pfn_gb_setTitle = NULL;
+
+static pfn_tab_count s_pfn_tab_count = NULL;
+static pfn_tab_text s_pfn_tab_text = NULL;
+static pfn_tab_setText s_pfn_tab_setText = NULL;
+
+static pfn_actions s_pfn_actions = NULL;
+static pfn_act_text s_pfn_act_text = NULL;
+static pfn_act_setText s_pfn_act_setText = NULL;
+
+static pfn_view_model s_pfn_view_model = NULL;
+static pfn_model_root s_pfn_model_root = NULL;
+static pfn_model_item s_pfn_model_item = NULL;
+static pfn_qitem_rowCount s_pfn_qitem_rowCount = NULL;
+static pfn_qitem_child s_pfn_qitem_child = NULL;
+static pfn_qitem_data s_pfn_qitem_data = NULL;
+static pfn_qvariant_toString s_pfn_qvariant_toString = NULL;
+static pfn_qvariant_dtor s_pfn_qvariant_dtor = NULL;
+
+typedef struct {
+    char title[256];
+    char file_type[32];
+    char file_size[32];
+    char play_time[64];
+    char add_ons[128];
+} GameMetaCache;
+
+static GameMetaCache s_game_meta[128];
+static int s_game_meta_count = 0;
+
+static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
+    if (!item || !s_pfn_qitem_data || !s_pfn_qvariant_toString || !s_pfn_toUtf8 || !s_pfn_constData) {
+        if (out_buf && buf_size > 0) out_buf[0] = '\0';
+        return;
+    }
+    char qvar[64] = {0};
+    s_pfn_qitem_data(item, qvar, 0); // Qt::DisplayRole = 0
+    char qstr[32] = {0};
+    s_pfn_qvariant_toString(qvar, qstr);
+    char qba[32] = {0};
+    s_pfn_toUtf8(qstr, qba);
+    const char* s = s_pfn_constData(qba);
+    if (s && s[0] != '\0') {
+        strncpy(out_buf, s, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+    } else {
+        out_buf[0] = '\0';
+    }
+    if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba);
+    if (s_pfn_dtor) s_pfn_dtor(qstr);
+    if (s_pfn_qvariant_dtor) s_pfn_qvariant_dtor(qvar);
+}
+
 static void TriggerLiveQtWidgetTranslation(int force) {
     if (s_is_in_game) return;
     static int s_in_translation = 0;
@@ -512,79 +638,6 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         s_in_translation = 0;
         return;
     }
-
-    typedef void* (*pfn_allWidgets)(void* ret_qlist);
-    typedef BOOL (*pfn_inherits)(void* this_ptr, const char* className);
-    typedef void* (*pfn_objectName)(const void* this_ptr, void* ret_qstr);
-    typedef void* (*pfn_parentWidget)(void* this_ptr);
-    typedef void* (*pfn_layout)(void* this_ptr);
-    typedef void (*pfn_setDirection)(void* layout_ptr, int dir);
-    typedef void (*pfn_setToolButtonStyle)(void* this_ptr, int style);
-    typedef void (*pfn_setIconSize)(void* this_ptr, const void* qsize_ptr);
-    typedef void (*pfn_setMinimumHeight)(void* this_ptr, int h);
-    typedef void (*pfn_setMinimumWidth)(void* this_ptr, int w);
-    typedef void (*pfn_setMaximumWidth)(void* this_ptr, int w);
-    typedef int (*pfn_minimumWidth)(const void* this_ptr);
-    typedef void* (*pfn_toolTip)(const void* this_ptr, void* ret_qstr);
-    typedef void (*pfn_setStyleSheet)(void* this_ptr, const void* qstr_ptr);
-
-    typedef void* (*pfn_pixmapFromWinHICON)(void* ret_qpixmap, HICON hIcon);
-    typedef void (*pfn_setPixmap)(void* this_ptr, const void* qpixmap_ptr);
-    typedef void (*pfn_dtor_pixmap)(void* qpixmap_ptr);
-    typedef void* (*pfn_fromUtf8_str)(void* ret_qstr, const char* str, int64_t size);
-    typedef void* (*pfn_toUtf8)(const void* qstr_this, void* ret_qba);
-    typedef const char* (*pfn_constData)(const void* qba_this);
-    typedef void (*pfn_dtor)(void* q_ptr);
-    typedef void (*pfn_qba_dtor)(void* qba_ptr);
-
-    typedef void* (*pfn_get_text)(void* this_ptr, void* ret_qstr);
-    typedef void (*pfn_set_text)(void* this_ptr, const void* qstr_ptr);
-
-    typedef int (*pfn_tab_count)(void* this_ptr);
-    typedef void* (*pfn_tab_text)(void* this_ptr, void* ret_qstr, int index);
-    typedef void (*pfn_tab_setText)(void* this_ptr, int index, const void* qstr_ptr);
-
-    typedef void* (*pfn_actions)(void* this_ptr, void* ret_qlist);
-    typedef void* (*pfn_act_text)(void* this_ptr, void* ret_qstr);
-    typedef void (*pfn_act_setText)(void* this_ptr, const void* qstr_ptr);
-
-    static pfn_allWidgets s_pfn_allWidgets = NULL;
-    static pfn_inherits s_pfn_inherits = NULL;
-    static pfn_objectName s_pfn_objectName = NULL;
-    static pfn_parentWidget s_pfn_parentWidget = NULL;
-    static pfn_layout s_pfn_layout = NULL;
-    static pfn_setDirection s_pfn_setDirection = NULL;
-    static pfn_setToolButtonStyle s_pfn_setToolButtonStyle = NULL;
-    static pfn_setIconSize s_pfn_setIconSize = NULL;
-    static pfn_setMinimumHeight s_pfn_setMinimumHeight = NULL;
-    static pfn_setMinimumWidth s_pfn_setMinimumWidth = NULL;
-    static pfn_setMaximumWidth s_pfn_setMaximumWidth = NULL;
-    static pfn_minimumWidth s_pfn_minimumWidth = NULL;
-    static pfn_toolTip s_pfn_toolTip = NULL;
-    static pfn_setStyleSheet s_pfn_setStyleSheet = NULL;
-    static pfn_pixmapFromWinHICON s_pfn_pixmapFromWinHICON = NULL;
-    static pfn_setPixmap s_pfn_setPixmap = NULL;
-    static pfn_dtor_pixmap s_pfn_dtor_pixmap = NULL;
-    static pfn_fromUtf8_str s_pfn_fromUtf8_str = NULL;
-    static pfn_toUtf8 s_pfn_toUtf8 = NULL;
-    static pfn_constData s_pfn_constData = NULL;
-    static pfn_dtor s_pfn_dtor = NULL;
-    static pfn_qba_dtor s_pfn_qba_dtor = NULL;
-
-    static pfn_get_text s_pfn_btn_text = NULL;
-    static pfn_set_text s_pfn_btn_setText = NULL;
-    static pfn_get_text s_pfn_lbl_text = NULL;
-    static pfn_set_text s_pfn_lbl_setText = NULL;
-    static pfn_get_text s_pfn_gb_title = NULL;
-    static pfn_set_text s_pfn_gb_setTitle = NULL;
-
-    static pfn_tab_count s_pfn_tab_count = NULL;
-    static pfn_tab_text s_pfn_tab_text = NULL;
-    static pfn_tab_setText s_pfn_tab_setText = NULL;
-
-    static pfn_actions s_pfn_actions = NULL;
-    static pfn_act_text s_pfn_act_text = NULL;
-    static pfn_act_setText s_pfn_act_setText = NULL;
 
     if (!s_pfn_allWidgets) {
         s_pfn_allWidgets = (pfn_allWidgets)GetProcAddress(hWidgets, "?allWidgets@QApplication@@SA?AV?$QList@PEAVQWidget@@@@XZ");
@@ -604,13 +657,19 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         if (hGui) {
             s_pfn_pixmapFromWinHICON = (pfn_pixmapFromWinHICON)GetProcAddress(hGui, "?qt_pixmapFromWinHICON@@YA?AVQPixmap@@PEAUHICON__@@@Z");
             s_pfn_dtor_pixmap = (pfn_dtor_pixmap)GetProcAddress(hGui, "??1QPixmap@@UEAA@XZ");
+            s_pfn_model_root = (pfn_model_root)GetProcAddress(hGui, "?invisibleRootItem@QStandardItemModel@@QEBAPEAVQStandardItem@@XZ");
+            s_pfn_model_item = (pfn_model_item)GetProcAddress(hGui, "?item@QStandardItemModel@@QEBAPEAVQStandardItem@@HH@Z");
+            s_pfn_qitem_rowCount = (pfn_qitem_rowCount)GetProcAddress(hGui, "?rowCount@QStandardItem@@QEBAHXZ");
+            s_pfn_qitem_child = (pfn_qitem_child)GetProcAddress(hGui, "?child@QStandardItem@@QEBAPEAV1@HH@Z");
+            s_pfn_qitem_data = (pfn_qitem_data)GetProcAddress(hGui, "?data@QStandardItem@@UEBA?AVQVariant@@H@Z");
         }
         s_pfn_setPixmap = (pfn_setPixmap)GetProcAddress(hWidgets, "?setPixmap@QLabel@@QEAAXAEBVQPixmap@@@Z");
         s_pfn_fromUtf8_str = (pfn_fromUtf8_str)GetProcAddress(hCore, "?fromUtf8@QString@@SA?AV1@PEBD_J@Z");
-        s_pfn_toUtf8 = (pfn_toUtf8)GetProcAddress(hCore, "?toUtf8@QString@@QEGBA?AVQByteArray@@XZ");
-        if (!s_pfn_toUtf8) s_pfn_toUtf8 = (pfn_toUtf8)GetProcAddress(hCore, "?toUtf8@QString@@QEHAA?AVQByteArray@@XZ");
-        s_pfn_constData = (pfn_constData)GetProcAddress(hCore, "?constData@QByteArray@@QEBAPEBDXZ");
-        s_pfn_dtor = (pfn_dtor)GetProcAddress(hCore, "??1QString@@QEAA@XZ");
+        s_pfn_toUtf8 = (pfn_toUtf8_fn)GetProcAddress(hCore, "?toUtf8@QString@@QEGBA?AVQByteArray@@XZ");
+        if (!s_pfn_toUtf8) s_pfn_toUtf8 = (pfn_toUtf8_fn)GetProcAddress(hCore, "?toUtf8@QString@@QEHAA?AVQByteArray@@XZ");
+        s_pfn_constData = (pfn_constData_fn)GetProcAddress(hCore, "?constData@QByteArray@@QEBAPEBDXZ");
+        s_pfn_dtor = (pfn_str_dtor_fn)GetProcAddress(hCore, "??1QString@@QEAA@XZ");
+        s_pfn_qba_dtor = (pfn_qba_dtor_fn)GetProcAddress(hCore, "??1QByteArray@@QEAA@XZ");
 
         s_pfn_btn_text = (pfn_get_text)GetProcAddress(hWidgets, "?text@QAbstractButton@@QEBA?AVQString@@XZ");
         s_pfn_btn_setText = (pfn_set_text)GetProcAddress(hWidgets, "?setText@QAbstractButton@@QEAAXAEBVQString@@@Z");
@@ -628,6 +687,9 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             s_pfn_act_text = (pfn_act_text)GetProcAddress(hGui, "?text@QAction@@QEBA?AVQString@@XZ");
             s_pfn_act_setText = (pfn_act_setText)GetProcAddress(hGui, "?setText@QAction@@QEAAXAEBVQString@@@Z");
         }
+        s_pfn_view_model = (pfn_view_model)GetProcAddress(hWidgets, "?model@QAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ");
+        s_pfn_qvariant_toString = (pfn_qvariant_toString)GetProcAddress(hCore, "?toString@QVariant@@QEBA?AVQString@@XZ");
+        s_pfn_qvariant_dtor = (pfn_qvariant_dtor)GetProcAddress(hCore, "??1QVariant@@QEAA@XZ");
     }
 
     if (!s_pfn_allWidgets || !s_pfn_inherits || !s_pfn_fromUtf8_str || !s_pfn_toUtf8 || !s_pfn_constData || !s_pfn_dtor) {
@@ -671,6 +733,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
 
             // Modern Home List View on FritchiiTile
             if (strcmp(obj_name_buf, "FritchiiTile") == 0) {
+                int cur_min_w = s_pfn_minimumWidth ? s_pfn_minimumWidth(w) : 0; // Read BEFORE setMinimumWidth!
                 void* parent = s_pfn_parentWidget ? s_pfn_parentWidget(w) : NULL;
                 void* layout = (parent && s_pfn_layout) ? s_pfn_layout(parent) : NULL;
                 if (layout && s_pfn_setDirection) {
@@ -694,8 +757,41 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         s_pfn_toUtf8(q_tip, q_ba);
                         const char* full_title = s_pfn_constData(q_ba);
                         if (full_title && full_title[0] != '\0') {
+                            char desc_line[512] = {0};
+                            for (int m = 0; m < s_game_meta_count; m++) {
+                                if (strcmp(s_game_meta[m].title, full_title) == 0) {
+                                    char parts[4][128] = {0};
+                                    int pcount = 0;
+                                    if (s_game_meta[m].file_type[0] != '\0') {
+                                        strncpy(parts[pcount++], s_game_meta[m].file_type, 127);
+                                    }
+                                    if (s_game_meta[m].file_size[0] != '\0') {
+                                        strncpy(parts[pcount++], s_game_meta[m].file_size, 127);
+                                    }
+                                    if (s_game_meta[m].play_time[0] != '\0') {
+                                        snprintf(parts[pcount++], 127, g_lang_vn ? "Giờ chơi: %s" : "Play time: %s", s_game_meta[m].play_time);
+                                    }
+                                    if (s_game_meta[m].add_ons[0] != '\0') {
+                                        strncpy(parts[pcount++], s_game_meta[m].add_ons, 127);
+                                    }
+                                    for (int pi = 0; pi < pcount; pi++) {
+                                        if (pi > 0) strncat(desc_line, "  •  ", sizeof(desc_line) - strlen(desc_line) - 1);
+                                        strncat(desc_line, parts[pi], sizeof(desc_line) - strlen(desc_line) - 1);
+                                    }
+                                    break;
+                                }
+                            }
+
+                            char combined[1024];
+                            if (desc_line[0] != '\0') {
+                                snprintf(combined, sizeof(combined), "%s\n%s", full_title, desc_line);
+                            } else {
+                                strncpy(combined, full_title, sizeof(combined) - 1);
+                                combined[sizeof(combined) - 1] = '\0';
+                            }
+
                             char q_new[32] = {0};
-                            s_pfn_fromUtf8_str(q_new, full_title, -1);
+                            s_pfn_fromUtf8_str(q_new, combined, -1);
                             s_pfn_btn_setText(w, q_new);
                             s_pfn_dtor(q_new);
                         }
@@ -703,7 +799,6 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         s_pfn_dtor(q_tip);
                     }
 
-                    int cur_min_w = s_pfn_minimumWidth ? s_pfn_minimumWidth(w) : 0;
                     if (force || lang_changed || mode_changed || cur_min_w < 600) {
                         if (s_pfn_setStyleSheet) {
                             const char* ss = "QToolButton#FritchiiTile { background: #1a1a1e; border: 1px solid #2a2a30; border-radius: 10px; padding: 10px 16px; text-align: left; font-size: 14px; font-weight: 600; color: #f4f4f5; } QToolButton#FritchiiTile:hover { background: #26262e; border-color: #8b5cf6; color: #ffffff; }";
@@ -734,17 +829,13 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 continue;
             }
 
-            // For other widgets: only re-translate if language changed or forced
-            if (!force && !lang_changed) {
-                continue;
-            }
-
-            // Pochita Dialog Logo Replacement
+            // Pochita Dialog Logo Replacement (always check on every timer tick)
             if (strcmp(obj_name_buf, "labelLogo") == 0) {
                 if (!g_hChainsaw) {
                     HMODULE hExe = GetModuleHandleW(NULL);
                     g_hChainsaw = (HICON)LoadImageW(hExe, L"IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
                     if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(568), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+                    if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
                 }
                 static int s_pochita_pix_inited = 0;
                 static char s_pochita_pix[64] = {0};
@@ -768,31 +859,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 continue;
             }
 
-            // 1. Handle QTabBar tabs
-            if (s_pfn_tab_count && s_pfn_tab_text && s_pfn_tab_setText && s_pfn_inherits(w, "QTabBar")) {
-                int count = s_pfn_tab_count(w);
-                for (int t = 0; t < count; t++) {
-                    char qstr_buf[32] = {0};
-                    s_pfn_tab_text(w, qstr_buf, t);
-                    char qba_buf[32] = {0};
-                    s_pfn_toUtf8(qstr_buf, qba_buf);
-                    const char* cur_text = s_pfn_constData(qba_buf);
-                    if (cur_text && cur_text[0] != '\0') {
-                        const char* target_text = TranslateTextBidirectional(cur_text, g_lang_vn);
-                        if (target_text && strcmp(cur_text, target_text) != 0) {
-                            char new_qstr_buf[32] = {0};
-                            s_pfn_fromUtf8_str(new_qstr_buf, target_text, -1);
-                            s_pfn_tab_setText(w, t, new_qstr_buf);
-                            s_pfn_dtor(new_qstr_buf);
-                        }
-                    }
-                    if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
-                    s_pfn_dtor(qstr_buf);
-                }
-                continue;
-            }
-
-            // 2. Handle QMenu and QWidget actions (Context Menu items)
+            // Context Menu Actions (always check on every timer tick so right-click popups translate immediately)
             if (s_pfn_actions && s_pfn_act_text && s_pfn_act_setText && s_pfn_inherits(w, "QMenu")) {
                 struct {
                     void* d;
@@ -823,49 +890,152 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         s_pfn_dtor(act_qstr);
                     }
                 }
-                // act_list stack cleaned up
+                continue;
             }
 
-            // 3. Handle Buttons, Labels, GroupBoxes
-            pfn_get_text fn_get = NULL;
-            pfn_set_text fn_set = NULL;
-
-            if (s_pfn_btn_text && s_pfn_btn_setText && s_pfn_inherits(w, "QAbstractButton")) {
-                fn_get = s_pfn_btn_text;
-                fn_set = s_pfn_btn_setText;
-            } else if (s_pfn_lbl_text && s_pfn_lbl_setText && s_pfn_inherits(w, "QLabel")) {
-                fn_get = s_pfn_lbl_text;
-                fn_set = s_pfn_lbl_setText;
-            } else if (s_pfn_gb_title && s_pfn_gb_setTitle && s_pfn_inherits(w, "QGroupBox")) {
-                fn_get = s_pfn_gb_title;
-                fn_set = s_pfn_gb_setTitle;
+            // QTreeView game metadata extraction
+            if (s_pfn_inherits(w, "QTreeView") && s_pfn_view_model && s_pfn_model_root) {
+                void* model = s_pfn_view_model(w);
+                if (model && s_pfn_inherits(model, "QStandardItemModel")) {
+                    void* root = s_pfn_model_root(model);
+                    if (root && s_pfn_qitem_rowCount && s_pfn_qitem_child) {
+                        int top_rows = s_pfn_qitem_rowCount(root);
+                        s_game_meta_count = 0;
+                        for (int r = 0; r < top_rows && s_game_meta_count < 128; r++) {
+                            void* top_item = s_pfn_qitem_child(root, r, 0);
+                            if (top_item) {
+                                int sub_rows = s_pfn_qitem_rowCount(top_item);
+                                if (sub_rows > 0) {
+                                    for (int sub = 0; sub < sub_rows && s_game_meta_count < 128; sub++) {
+                                        void* game_item = s_pfn_qitem_child(top_item, sub, 0);
+                                        if (game_item) {
+                                            char t[256] = {0};
+                                            HelperGetItemText(game_item, t, sizeof(t));
+                                            if (t[0] != '\0') {
+                                                GameMetaCache* entry = &s_game_meta[s_game_meta_count++];
+                                                strncpy(entry->title, t, sizeof(entry->title) - 1);
+                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 1), entry->file_type, sizeof(entry->file_type));
+                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 2), entry->file_size, sizeof(entry->file_size));
+                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 3), entry->play_time, sizeof(entry->play_time));
+                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 4), entry->add_ons, sizeof(entry->add_ons));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    char t[256] = {0};
+                                    HelperGetItemText(top_item, t, sizeof(t));
+                                    if (t[0] != '\0') {
+                                        GameMetaCache* entry = &s_game_meta[s_game_meta_count++];
+                                        strncpy(entry->title, t, sizeof(entry->title) - 1);
+                                        if (s_pfn_model_item) {
+                                            HelperGetItemText(s_pfn_model_item(model, r, 1), entry->file_type, sizeof(entry->file_type));
+                                            HelperGetItemText(s_pfn_model_item(model, r, 2), entry->file_size, sizeof(entry->file_size));
+                                            HelperGetItemText(s_pfn_model_item(model, r, 3), entry->play_time, sizeof(entry->play_time));
+                                            HelperGetItemText(s_pfn_model_item(model, r, 4), entry->add_ons, sizeof(entry->add_ons));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
             }
 
-            if (fn_get && fn_set) {
+            // For all other static widgets: skip if language did not change and not forced
+            if (!force && !lang_changed) {
+                continue;
+            }
+
+            // 1. Handle QTabBar tabs
+            if (s_pfn_tab_count && s_pfn_tab_text && s_pfn_tab_setText && s_pfn_inherits(w, "QTabBar")) {
+                int count = s_pfn_tab_count(w);
+                for (int t = 0; t < count; t++) {
+                    char qstr_buf[32] = {0};
+                    s_pfn_tab_text(w, qstr_buf, t);
+                    char qba_buf[32] = {0};
+                    s_pfn_toUtf8(qstr_buf, qba_buf);
+                    const char* cur_text = s_pfn_constData(qba_buf);
+                    if (cur_text && cur_text[0] != '\0') {
+                        const char* target_text = TranslateTextBidirectional(cur_text, g_lang_vn);
+                        if (target_text && strcmp(cur_text, target_text) != 0) {
+                            char new_qstr_buf[32] = {0};
+                            s_pfn_fromUtf8_str(new_qstr_buf, target_text, -1);
+                            s_pfn_tab_setText(w, t, new_qstr_buf);
+                            s_pfn_dtor(new_qstr_buf);
+                        }
+                    }
+                    if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
+                    s_pfn_dtor(qstr_buf);
+                }
+                continue;
+            }
+
+            // 2. Buttons
+            if (s_pfn_btn_text && s_pfn_btn_setText && (s_pfn_inherits(w, "QPushButton") || s_pfn_inherits(w, "QToolButton") || s_pfn_inherits(w, "QRadioButton") || s_pfn_inherits(w, "QCheckBox"))) {
                 char qstr_buf[32] = {0};
-                fn_get(w, qstr_buf);
-
+                s_pfn_btn_text(w, qstr_buf);
                 char qba_buf[32] = {0};
                 s_pfn_toUtf8(qstr_buf, qba_buf);
                 const char* cur_text = s_pfn_constData(qba_buf);
-
                 if (cur_text && cur_text[0] != '\0') {
                     const char* target_text = TranslateTextBidirectional(cur_text, g_lang_vn);
                     if (target_text && strcmp(cur_text, target_text) != 0) {
                         char new_qstr_buf[32] = {0};
                         s_pfn_fromUtf8_str(new_qstr_buf, target_text, -1);
-                        fn_set(w, new_qstr_buf);
+                        s_pfn_btn_setText(w, new_qstr_buf);
                         s_pfn_dtor(new_qstr_buf);
                     }
                 }
-
                 if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
                 s_pfn_dtor(qstr_buf);
+                continue;
+            }
+
+            // 3. Labels
+            if (s_pfn_lbl_text && s_pfn_lbl_setText && s_pfn_inherits(w, "QLabel")) {
+                char qstr_buf[32] = {0};
+                s_pfn_lbl_text(w, qstr_buf);
+                char qba_buf[32] = {0};
+                s_pfn_toUtf8(qstr_buf, qba_buf);
+                const char* cur_text = s_pfn_constData(qba_buf);
+                if (cur_text && cur_text[0] != '\0') {
+                    const char* target_text = TranslateTextBidirectional(cur_text, g_lang_vn);
+                    if (target_text && strcmp(cur_text, target_text) != 0) {
+                        char new_qstr_buf[32] = {0};
+                        s_pfn_fromUtf8_str(new_qstr_buf, target_text, -1);
+                        s_pfn_lbl_setText(w, new_qstr_buf);
+                        s_pfn_dtor(new_qstr_buf);
+                    }
+                }
+                if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
+                s_pfn_dtor(qstr_buf);
+                continue;
+            }
+
+            // 4. GroupBoxes
+            if (s_pfn_gb_title && s_pfn_gb_setTitle && s_pfn_inherits(w, "QGroupBox")) {
+                char qstr_buf[32] = {0};
+                s_pfn_gb_title(w, qstr_buf);
+                char qba_buf[32] = {0};
+                s_pfn_toUtf8(qstr_buf, qba_buf);
+                const char* cur_text = s_pfn_constData(qba_buf);
+                if (cur_text && cur_text[0] != '\0') {
+                    const char* target_text = TranslateTextBidirectional(cur_text, g_lang_vn);
+                    if (target_text && strcmp(cur_text, target_text) != 0) {
+                        char new_qstr_buf[32] = {0};
+                        s_pfn_fromUtf8_str(new_qstr_buf, target_text, -1);
+                        s_pfn_gb_setTitle(w, new_qstr_buf);
+                        s_pfn_dtor(new_qstr_buf);
+                    }
+                }
+                if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
+                s_pfn_dtor(qstr_buf);
+                continue;
             }
         }
     }
 
-    // widget_list stack cleaned up
     s_in_translation = 0;
 }
 
