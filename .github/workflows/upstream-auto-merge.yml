@@ -105,33 +105,54 @@ jobs:
           # Preserve the fork's release assets even when upstream changed them cleanly.
           git restore --source="$YNGCHII_HEAD" --staged --worktree -- \
             .github/assets .github/scripts/package_windows.py .github/scripts/patch_exe_icon_inplace.py \
-            .github/scripts/sync_release.py .github/workflows/upstream-auto-merge.yml \
-            .github/workflows/release-binaries.yml dist/branding/yngchii_logo.png \
-            dist/eden.ico dist/fritchii.ico dist/lichii.ico dist/yuzu.ico src/yuzu/fritchii/whats-new.md
+            .github/scripts/sync_release.py .github/workflows dist/branding/yngchii_logo.png \
+            dist/eden.ico dist/fritchii.ico dist/lichii.ico dist/yuzu.ico src/yuzu/fritchii/whats-new.md \
+            dist/frizti_version.txt
+
+          REVIEW_DIR="$RUNNER_TEMP/upstream-review"
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            mkdir -p "$REVIEW_DIR"
+            {
+              printf 'Base: %s\nUpstream: %s (%s)\nConflicting paths:\n' \
+                "$YNGCHII_HEAD" "$UPSTREAM_TAG" "$(git rev-parse "$UPSTREAM_TAG^{commit}")"
+              git diff --name-only --diff-filter=U
+            } | tee "$REVIEW_DIR/conflicts.txt"
+            git merge --abort
+            echo "Review required. See the upstream-sync-review artifact for the commits and conflicting paths." >> "$GITHUB_STEP_SUMMARY"
+            echo "review_artifact=true" >> "$GITHUB_OUTPUT"
+            echo "merge_status=review" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           REVIEW_REASON=
-          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
-            git diff --name-only --diff-filter=U
-            git merge --abort
-            REVIEW_HEAD=$(git rev-parse "$UPSTREAM_TAG^{commit}")
-            REVIEW_REASON="Upstream changes conflict with Yngchii. Resolve the merge while preserving the fork's branding, proxy and UI."
-          else
-            if ! git diff --cached --quiet "$YNGCHII_HEAD" -- \
-                src/yuzu/fritchii src/yuzu/main_window.cpp src/yuzu/main.ui \
-                src/yuzu/about_dialog.cpp src/yuzu/aboutdialog.ui src/frontend_common/update_checker.cpp \
-                src/frontend_common/update_checker.h; then
-              REVIEW_REASON="Upstream changes touch the UI or updater used by the Yngchii proxy. Review compatibility before merging."
-            fi
-            git commit -m "chore(sync): merge upstream $UPSTREAM_TAG into Yngchii-X3D"
-            REVIEW_HEAD=HEAD
+          if ! git diff --cached --quiet "$YNGCHII_HEAD" -- \
+              src/yuzu/fritchii src/yuzu/main_window.cpp src/yuzu/main.ui \
+              src/yuzu/about_dialog.cpp src/yuzu/aboutdialog.ui src/frontend_common/update_checker.cpp \
+              src/frontend_common/update_checker.h src/qt_common/discord; then
+            REVIEW_REASON="Upstream changes touch the UI or updater used by the Yngchii proxy. Review compatibility before merging."
           fi
+
+          # The restored version file is the previous base for changelog generation.
+          python3 .github/scripts/sync_release.py "$VERSION_NUM" "$UPSTREAM_TAG"
+          git add -- dist/frizti_version.txt CHANGELOG.md
+          git commit -m "chore(sync): merge upstream $UPSTREAM_TAG into Yngchii-X3D"
 
           if [ -n "$REVIEW_REASON" ]; then
             BRANCH_NAME="sync/upstream-v${VERSION_NUM}"
             OPEN_PR=$(gh pr list --head "$BRANCH_NAME" --base main --state open --json number --jq '.[0].number // empty')
             if [ -z "$OPEN_PR" ]; then
               if ! git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null; then
-                git push origin "$REVIEW_HEAD:refs/heads/$BRANCH_NAME"
+                if ! git push origin "HEAD:refs/heads/$BRANCH_NAME"; then
+                  mkdir -p "$REVIEW_DIR"
+                  git bundle create "$REVIEW_DIR/merge.bundle" HEAD "^$YNGCHII_HEAD"
+                  git bundle verify "$REVIEW_DIR/merge.bundle"
+                  printf 'Base: %s\nUpstream: %s\nMerge: %s\n%s\n' \
+                    "$YNGCHII_HEAD" "$UPSTREAM_TAG" "$(git rev-parse HEAD)" "$REVIEW_REASON" > "$REVIEW_DIR/merge.txt"
+                  echo "GitHub rejected the review branch push. The upstream-sync-review artifact contains the merge commit." >> "$GITHUB_STEP_SUMMARY"
+                  echo "review_artifact=true" >> "$GITHUB_OUTPUT"
+                  echo "merge_status=review" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
               fi
               if ! gh pr create --base main --head "$BRANCH_NAME" \
                 --title "Sync upstream $UPSTREAM_TAG into Yngchii-X3D" --body "$REVIEW_REASON"; then
@@ -145,14 +166,12 @@ jobs:
 
           echo "merge_status=clean" >> "$GITHUB_OUTPUT"
 
-      - name: Record upstream version
-        if: steps.do_merge.outputs.merge_status == 'clean'
-        run: |
-          python3 .github/scripts/sync_release.py "${{ steps.upstream_info.outputs.version_num }}" "${{ steps.upstream_info.outputs.latest_upstream_tag }}"
-          git add dist/frizti_version.txt CHANGELOG.md
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(sync): record upstream version ${{ steps.upstream_info.outputs.version_num }}"
-          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.do_merge.outputs.review_artifact == 'true'
+        with:
+          name: upstream-sync-review
+          path: ${{ runner.temp }}/upstream-review/
+          if-no-files-found: error
 
       - name: Push merged source
         if: steps.do_merge.outputs.merge_status == 'clean'
