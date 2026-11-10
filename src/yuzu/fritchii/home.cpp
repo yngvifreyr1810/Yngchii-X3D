@@ -38,6 +38,7 @@ struct Game {
     QString path;
     u64 program_id = 0;
     QPixmap icon;
+    QString details;
 };
 
 QPixmap Rounded(const QPixmap& source, int size, int radius) {
@@ -132,6 +133,39 @@ std::vector<Game> CollectGames(QStandardItemModel* model, const QPixmap& fallbac
             // No icon in the dump and none next to it: Fritchii's own icon, not an empty square.
             game.icon = fallback;
         }
+
+        // Extract sibling columns from parent or model for File Type, Size, Play Time, Addons
+        QString file_type, file_size, play_time, add_ons;
+        const auto* parent_item = item->parent();
+        const int row_idx = item->row();
+        if (parent_item) {
+            if (const auto* c1 = parent_item->child(row_idx, 1)) file_type = c1->text();
+            if (const auto* c2 = parent_item->child(row_idx, 2)) file_size = c2->text();
+            if (const auto* c3 = parent_item->child(row_idx, 3)) play_time = c3->text();
+            if (const auto* c4 = parent_item->child(row_idx, 4)) add_ons = c4->text();
+        } else if (model) {
+            if (const auto* c1 = model->item(row_idx, 1)) file_type = c1->text();
+            if (const auto* c2 = model->item(row_idx, 2)) file_size = c2->text();
+            if (const auto* c3 = model->item(row_idx, 3)) play_time = c3->text();
+            if (const auto* c4 = model->item(row_idx, 4)) add_ons = c4->text();
+        }
+        if (file_type.isEmpty()) file_type = item->data(GameListItemPath::FileTypeRole).toString();
+
+        QStringList parts;
+        if (!file_type.isEmpty()) parts << file_type;
+        if (!file_size.isEmpty()) parts << file_size;
+        if (!play_time.isEmpty()) parts << QStringLiteral("Giờ chơi: %1").arg(play_time);
+        if (!add_ons.isEmpty()) {
+            QString clean_addons = add_ons.trimmed();
+            clean_addons.replace(QLatin1Char('\n'), QStringLiteral(", "));
+            parts << clean_addons;
+        }
+        if (parts.isEmpty()) {
+            parts << QStringLiteral("Title ID: 0x%1").arg(QString::number(game.program_id, 16).toUpper());
+            parts << QStringLiteral("Ryzen X3D Active");
+        }
+        game.details = parts.join(QStringLiteral("  •  "));
+
         games.push_back(std::move(game));
     };
     for (int row = 0; row < model->rowCount(); ++row) {
@@ -393,13 +427,15 @@ void Home::Refresh() {
     };
     int shown = 0;
     for (const Game& game : games) {
-        if (game.path == hero_path || shown == MaxTiles) {
+        if (!modern_list_view && (game.path == hero_path || shown == MaxTiles)) {
             continue;
         }
         ++shown;
-        const QString sub = QStringLiteral("Title ID: 0x%1 • Ryzen X3D Active")
-                                .arg(QString::number(game.program_id, 16).toUpper());
+        const QString sub = game.details;
         QToolButton* button = tile(QIcon(Rounded(game.icon, modern_list_view ? 56 : TileIcon, 12)), game.title, sub);
+        if (modern_list_view && game.path == hero_path) {
+            button->setStyleSheet(QStringLiteral("QToolButton#FritchiiTile { background: #222227; border: 1px solid #a78bfa; border-radius: 10px; padding: 8px 16px; color: #ffffff; font-size: 14px; font-weight: 600; text-align: left; margin-bottom: 4px; }"));
+        }
         connect(button, &QToolButton::clicked, this,
                 [this, path = game.path, id = game.program_id] {
                     hero_path = path;

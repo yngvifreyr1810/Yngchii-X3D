@@ -476,36 +476,12 @@ static void InstallQt6IATHooks(void) {
 // 4. DYNAMIC LIVE WIDGET & ACTION RE-TRANSLATION
 // ==============================================================================
 static void TriggerQtRetranslate(void) {
-    if (s_is_in_game) return;
-    HMODULE hCore = GetModuleHandleW(L"Qt6Core.dll");
-    if (!hCore) return;
-
-    typedef void* (*pfn_app_instance)(void);
-    typedef void (*pfn_post_event)(void* receiver, void* event, int priority);
-
-    static pfn_app_instance s_app_inst = NULL;
-    static pfn_post_event s_post_event = NULL;
-
-    if (!s_app_inst) {
-        s_app_inst = (pfn_app_instance)GetProcAddress(hCore, "?instance@QCoreApplication@@SAPEAV1@XZ");
-        s_post_event = (pfn_post_event)GetProcAddress(hCore, "?postEvent@QCoreApplication@@SAXPEAVQObject@@PEAVQEvent@@H@Z");
-    }
-
-    if (s_app_inst && s_post_event) {
-        void* app = s_app_inst();
-        if (app) {
-            void* ev = malloc(64);
-            if (ev) {
-                memset(ev, 0, 64);
-                int* type_ptr = (int*)((char*)ev + sizeof(void*));
-                *type_ptr = 111; // QEvent::LanguageChange
-                s_post_event(app, ev, 0);
-            }
-        }
-    }
+    // Safe no-op: Direct live widget translation handles all text immediately
 }
 
-#define WM_YNGCHII_INIT_BTN (WM_APP + 0x55)
+#define WM_YNGCHII_INIT_BTN    (WM_APP + 0x55)
+#define WM_YNGCHII_REFRESH_VIEW (WM_APP + 0x56)
+#define WM_YNGCHII_LANG_TOGGLE  (WM_APP + 0x57)
 #define TIMER_ID_YNGCHII 0x7788
 #define TIMER_ID_ANIM    0x7789
 
@@ -523,7 +499,7 @@ static int s_drag_moved = 0;
 static int s_drag_start_y = 0;
 static float s_drag_start_pos = 0.0f;
 
-static void TriggerLiveQtWidgetTranslation(void) {
+static void TriggerLiveQtWidgetTranslation(int force) {
     if (s_is_in_game) return;
     static int s_in_translation = 0;
     if (s_in_translation) return;
@@ -557,6 +533,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
     typedef void* (*pfn_toUtf8)(const void* qstr_this, void* ret_qba);
     typedef const char* (*pfn_constData)(const void* qba_this);
     typedef void (*pfn_dtor)(void* q_ptr);
+    typedef void (*pfn_qba_dtor)(void* qba_ptr);
 
     typedef void* (*pfn_get_text)(void* this_ptr, void* ret_qstr);
     typedef void (*pfn_set_text)(void* this_ptr, const void* qstr_ptr);
@@ -588,6 +565,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
     static pfn_toUtf8 s_pfn_toUtf8 = NULL;
     static pfn_constData s_pfn_constData = NULL;
     static pfn_dtor s_pfn_dtor = NULL;
+    static pfn_qba_dtor s_pfn_qba_dtor = NULL;
 
     static pfn_get_text s_pfn_btn_text = NULL;
     static pfn_set_text s_pfn_btn_setText = NULL;
@@ -660,14 +638,11 @@ static void TriggerLiveQtWidgetTranslation(void) {
 
     s_pfn_allWidgets(&widget_list);
 
-    static int64_t s_last_widget_count = 0;
     static int s_last_lang = -1;
-    if (widget_list.size == s_last_widget_count && s_last_lang == g_lang_vn) {
-        s_pfn_dtor(&widget_list);
+    if (!force && s_last_lang == g_lang_vn) {
         s_in_translation = 0;
         return;
     }
-    s_last_widget_count = widget_list.size;
     s_last_lang = g_lang_vn;
 
     if (widget_list.ptr && widget_list.size > 0) {
@@ -684,7 +659,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
                 s_pfn_toUtf8(qstr_n, qba_n);
                 const char* oname = s_pfn_constData(qba_n);
                 if (oname) strncpy(obj_name_buf, oname, sizeof(obj_name_buf) - 1);
-                s_pfn_dtor(qba_n);
+                if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_n);
                 s_pfn_dtor(qstr_n);
             }
 
@@ -717,7 +692,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
                             s_pfn_btn_setText(w, q_new);
                             s_pfn_dtor(q_new);
                         }
-                        s_pfn_dtor(q_ba);
+                        if (s_pfn_qba_dtor) s_pfn_qba_dtor(q_ba);
                         s_pfn_dtor(q_tip);
                     }
 
@@ -753,11 +728,14 @@ static void TriggerLiveQtWidgetTranslation(void) {
                     g_hChainsaw = (HICON)LoadImageW(hExe, L"IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
                     if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(568), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
                 }
-                if (g_hChainsaw && s_pfn_pixmapFromWinHICON && s_pfn_setPixmap) {
-                    char qpix[64] = {0};
-                    s_pfn_pixmapFromWinHICON(qpix, g_hChainsaw);
-                    s_pfn_setPixmap(w, qpix);
-                    if (s_pfn_dtor_pixmap) s_pfn_dtor_pixmap(qpix);
+                static int s_pochita_pix_inited = 0;
+                static char s_pochita_pix[64] = {0};
+                if (!s_pochita_pix_inited && g_hChainsaw && s_pfn_pixmapFromWinHICON) {
+                    s_pfn_pixmapFromWinHICON(s_pochita_pix, g_hChainsaw);
+                    s_pochita_pix_inited = 1;
+                }
+                if (s_pochita_pix_inited && s_pfn_setPixmap) {
+                    s_pfn_setPixmap(w, s_pochita_pix);
                 }
                 continue;
             }
@@ -790,7 +768,7 @@ static void TriggerLiveQtWidgetTranslation(void) {
                             s_pfn_dtor(new_qstr_buf);
                         }
                     }
-                    s_pfn_dtor(qba_buf);
+                    if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
                     s_pfn_dtor(qstr_buf);
                 }
                 continue;
@@ -823,11 +801,11 @@ static void TriggerLiveQtWidgetTranslation(void) {
                                 s_pfn_dtor(new_act_qstr);
                             }
                         }
-                        s_pfn_dtor(act_qba);
+                        if (s_pfn_qba_dtor) s_pfn_qba_dtor(act_qba);
                         s_pfn_dtor(act_qstr);
                     }
                 }
-                s_pfn_dtor(&act_list);
+                // act_list stack cleaned up
             }
 
             // 3. Handle Buttons, Labels, GroupBoxes
@@ -863,13 +841,13 @@ static void TriggerLiveQtWidgetTranslation(void) {
                     }
                 }
 
-                s_pfn_dtor(qba_buf);
+                if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_buf);
                 s_pfn_dtor(qstr_buf);
             }
         }
     }
 
-    s_pfn_dtor(&widget_list);
+    // widget_list stack cleaned up
     s_in_translation = 0;
 }
 
@@ -877,8 +855,11 @@ static void ApplyLanguageState(HWND hBtnWnd, int new_vn) {
     if (g_lang_vn != new_vn) {
         g_lang_vn = new_vn;
         SaveLanguagePreference(g_lang_vn);
-        TriggerQtRetranslate();
-        TriggerLiveQtWidgetTranslation();
+        if (s_hwndMain && IsWindow(s_hwndMain)) {
+            PostMessageW(s_hwndMain, WM_YNGCHII_LANG_TOGGLE, 0, 0);
+        } else {
+            TriggerLiveQtWidgetTranslation(1);
+        }
     }
     SetTimer(hBtnWnd, TIMER_ID_ANIM, 15, NULL);
     InvalidateRect(hBtnWnd, NULL, FALSE);
@@ -1015,7 +996,7 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                     g_lang_vn = target_vn;
                     SaveLanguagePreference(g_lang_vn);
                     TriggerQtRetranslate();
-                    TriggerLiveQtWidgetTranslation();
+                    TriggerLiveQtWidgetTranslation(0);
                 }
                 InvalidateRect(hWnd, NULL, FALSE);
                 UpdateWindow(hWnd);
@@ -1200,7 +1181,7 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
                     ShowWindow(s_hwndLangBtn, SW_SHOW);
                 }
             }
-            TriggerLiveQtWidgetTranslation();
+            TriggerLiveQtWidgetTranslation(0);
         }
         return 0;
     }
@@ -1208,7 +1189,7 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
     if (uMsg == WM_KEYDOWN) {
         if (wParam == VK_F8 || (wParam == 'G' && (GetKeyState(VK_CONTROL) & 0x8000))) {
             s_modern_home_list = !s_modern_home_list;
-            TriggerLiveQtWidgetTranslation();
+            TriggerLiveQtWidgetTranslation(0);
             return 0;
         }
         if (wParam == VK_F9 || (wParam == 'L' && (GetKeyState(VK_CONTROL) & 0x8000))) {
