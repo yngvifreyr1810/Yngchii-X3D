@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import os
 import sys
-import glob
+import base64
 import shutil
 import hashlib
 import re
 import zipfile
 import subprocess
+import tempfile
 
 def get_sha256(filepath):
     h = hashlib.sha256()
@@ -24,67 +25,40 @@ def main():
     upstream_tag = sys.argv[2].strip()
     target_tag = sys.argv[3].strip()
     repo = sys.argv[4].strip() if len(sys.argv) > 4 else os.environ.get("GH_REPO", "yngvifreyr1810/Yngchii-X3D")
+    upstream_match = re.fullmatch(r"fritchii-v([0-9]+(?:\.[0-9]+){1,2})", upstream_tag)
+    if not upstream_match or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,4}", version_num):
+        raise ValueError("Expected numeric Yngchii version and stable Fritchii tag")
+    upstream_version = upstream_match[1]
 
     print(f"=== Starting Packaging for Yngchii-X3D v{version_num} ===")
     print(f"Upstream Tag: {upstream_tag} | Target Tag: {target_tag} | Repo: {repo}")
 
-    staging_dl = "staging_upstream_dl"
     staging_build = f"Yngchii-X3D-v{version_num}"
-    os.makedirs(staging_dl, exist_ok=True)
     if os.path.exists(staging_build):
         shutil.rmtree(staging_build)
     os.makedirs(staging_build, exist_ok=True)
 
-    # 1. Download upstream Windows x64 zip
-    print(f"Downloading upstream Windows release asset from Frizti/Fritchii ({upstream_tag})...")
-    dl_cmd = [
-        "gh", "release", "download", upstream_tag,
-        "--repo", "Frizti/Fritchii",
-        "--pattern", "*Windows-x64.zip",
-        "--dir", staging_dl,
-        "--clobber"
-    ]
-    res = subprocess.run(dl_cmd, capture_output=True, text=True, check=False)
-    if res.returncode != 0:
-        print(f"Warning: Failed to download upstream asset: {res.stderr.strip()}")
-        # Check if any zip was downloaded
-        zips = glob.glob(os.path.join(staging_dl, "*.zip"))
-        if not zips:
-            print("No upstream Windows zip found. Skipping binary packaging for now.")
-            return 0
-    else:
-        print("Upstream asset downloaded successfully.")
-
-    zips = glob.glob(os.path.join(staging_dl, "*.zip"))
-    if not zips:
-        print("No zip file in staging_dl. Exiting.")
-        return 0
-
-    upstream_zip = zips[0]
-    print(f"Extracting {upstream_zip}...")
-    with zipfile.ZipFile(upstream_zip, 'r') as zf:
-        zf.extractall("staging_extracted")
-
-    # Find extracted root directory
-    extracted_items = os.listdir("staging_extracted")
-    if len(extracted_items) == 1 and os.path.isdir(os.path.join("staging_extracted", extracted_items[0])):
-        root_dir = os.path.join("staging_extracted", extracted_items[0])
-    else:
-        root_dir = "staging_extracted"
-
-    # Copy extracted files to staging_build
-    for item in os.listdir(root_dir):
-        if item.lower() == "covers":
-            continue
-        s = os.path.join(root_dir, item)
-        d = os.path.join(staging_build, item)
-        if os.path.isdir(s):
-            shutil.copytree(s, d)
-        else:
-            if item in ["lichii.exe", "Fritchii.exe"]:
-                shutil.copy2(s, os.path.join(staging_build, "Yngchii-X3D.exe"))
+    # A fresh staging directory avoids reusing an older archive after a failed download.
+    upstream_name = f"Fritchii-v{upstream_version}-Windows-x64.zip"
+    with tempfile.TemporaryDirectory(prefix="yngchii-upstream-") as scratch:
+        subprocess.run(["gh", "release", "download", upstream_tag, "--repo", "Frizti/Fritchii",
+                        "--pattern", upstream_name, "--dir", scratch], check=True)
+        extracted = os.path.join(scratch, "extracted")
+        with zipfile.ZipFile(os.path.join(scratch, upstream_name)) as zf:
+            zf.extractall(extracted)
+        items = os.listdir(extracted)
+        root_dir = extracted
+        if len(items) == 1 and os.path.isdir(os.path.join(extracted, items[0])):
+            root_dir = os.path.join(extracted, items[0])
+        for item in os.listdir(root_dir):
+            if item.lower() == "covers":
+                continue
+            src = os.path.join(root_dir, item)
+            dst = os.path.join(staging_build, item)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst)
             else:
-                shutil.copy2(s, d)
+                shutil.copy2(src, dst)
 
     # If Yngchii-X3D.exe was not created, rename whatever exe is found
     exe_target = os.path.join(staging_build, "Yngchii-X3D.exe")
@@ -103,9 +77,13 @@ def main():
     assets_dir = os.path.join(".github", "assets")
     icon_pkl = os.path.join(assets_dir, "pochita_icons.pkl")
     rcc_ico = os.path.join(assets_dir, "pochita_rcc.ico")
+    stock_rcc = base64.b64decode(subprocess.check_output(
+        ["gh", "api", f"repos/Frizti/Fritchii/contents/dist/fritchii.ico?ref={upstream_tag}",
+         "--jq", ".content"]
+    ))
     from patch_exe_icon_inplace import patch_exe_icon
     exe_size = os.path.getsize(exe_target)
-    patch_exe_icon(exe_target, icon_pkl, rcc_ico, strict=True)
+    patch_exe_icon(exe_target, icon_pkl, rcc_ico, strict=True, stock_rcc=stock_rcc)
     if os.path.getsize(exe_target) != exe_size:
         raise RuntimeError("Icon patch changed the executable size")
 
@@ -158,6 +136,9 @@ def main():
             with open(doc_src, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             content = content.replace("V5.6.1.1", f"V{version_num}")
+            content = content.replace("Fritchii V5.6", f"Fritchii V{upstream_version}")
+            content = content.replace("Fritchii upstream V5.6", f"Fritchii upstream V{upstream_version}")
+            content = content.replace("FRITCHII UPSTREAM V5.6", f"FRITCHII UPSTREAM V{upstream_version}")
             with open(os.path.join(staging_build, doc), "w", encoding="utf-8") as f:
                 f.write(content)
 

@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       force_sync:
-        description: 'Force sync even if no new tag detected'
+        description: 'Build a candidate even if this upstream version was already synced'
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -28,17 +28,15 @@ jobs:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     outputs:
-      already_synced: ${{ steps.upstream_info.outputs.already_synced }}
       version_num: ${{ steps.upstream_info.outputs.version_num }}
       latest_upstream_tag: ${{ steps.upstream_info.outputs.latest_upstream_tag }}
-      merge_status: ${{ steps.do_merge.outputs.merge_status }}
-      merged_sha: ${{ steps.push_main.outputs.merged_sha }}
+      package_ref: ${{ steps.do_merge.outputs.package_ref }}
 
     steps:
       - name: Checkout Yngchii-X3D Repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -57,7 +55,8 @@ jobs:
         id: upstream_info
         run: |
           # Find latest upstream tag matching fritchii-v*
-          LATEST_UPSTREAM_TAG=$(git tag -l "fritchii-v*" | sort -V | tail -n 1)
+          LATEST_UPSTREAM_TAG=$(git tag -l "fritchii-v*" |
+            awk '/^fritchii-v[0-9]+\.[0-9]+(\.[0-9]+)?$/' | sort -V | tail -n 1)
           if [ -z "$LATEST_UPSTREAM_TAG" ]; then
             echo "No fritchii-v* tags found."
             exit 1
@@ -69,7 +68,6 @@ jobs:
           
           echo "latest_upstream_tag=$LATEST_UPSTREAM_TAG" >> $GITHUB_OUTPUT
           echo "version_num=$VERSION_NUM" >> $GITHUB_OUTPUT
-          echo "target_yngchii_tag=$TARGET_YNGCHII_TAG" >> $GITHUB_OUTPUT
           
           # A Yngchii revision such as 5.6.1.1 also satisfies upstream 5.6.
           SYNCED_TAG=$(gh release list --repo "${{ github.repository }}" --exclude-drafts --limit 100 --json tagName |
@@ -98,6 +96,7 @@ jobs:
           git merge --no-ff --no-commit "$UPSTREAM_TAG" ||
             git rev-parse --verify -q MERGE_HEAD >/dev/null
           if ! git rev-parse --verify -q MERGE_HEAD >/dev/null; then
+            echo "package_ref=$YNGCHII_HEAD" >> "$GITHUB_OUTPUT"
             echo "merge_status=up_to_date" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -105,33 +104,65 @@ jobs:
           # Preserve the fork's release assets even when upstream changed them cleanly.
           git restore --source="$YNGCHII_HEAD" --staged --worktree -- \
             .github/assets .github/scripts/package_windows.py .github/scripts/patch_exe_icon_inplace.py \
-            .github/scripts/sync_release.py .github/workflows/upstream-auto-merge.yml \
-            .github/workflows/release-binaries.yml dist/branding/yngchii_logo.png \
-            dist/eden.ico dist/fritchii.ico dist/lichii.ico dist/yuzu.ico src/yuzu/fritchii/whats-new.md
+            .github/scripts/sync_release.py .github/workflows dist/branding/yngchii_logo.png \
+            dist/eden.ico dist/fritchii.ico dist/lichii.ico dist/yuzu.ico src/yuzu/fritchii/whats-new.md \
+            dist/frizti_version.txt
 
-          REVIEW_REASON=
+          REVIEW_DIR="$RUNNER_TEMP/upstream-review"
           if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
-            git diff --name-only --diff-filter=U
+            mkdir -p "$REVIEW_DIR"
+            {
+              printf 'Base: %s\nUpstream: %s (%s)\nConflicting paths:\n' \
+                "$YNGCHII_HEAD" "$UPSTREAM_TAG" "$(git rev-parse "$UPSTREAM_TAG^{commit}")"
+              git diff --name-only --diff-filter=U
+            } | tee "$REVIEW_DIR/conflicts.txt"
             git merge --abort
-            REVIEW_HEAD=$(git rev-parse "$UPSTREAM_TAG^{commit}")
-            REVIEW_REASON="Upstream changes conflict with Yngchii. Resolve the merge while preserving the fork's branding, proxy and UI."
-          else
-            if ! git diff --cached --quiet "$YNGCHII_HEAD" -- \
-                src/yuzu/fritchii src/yuzu/main_window.cpp src/yuzu/main.ui \
-                src/yuzu/about_dialog.cpp src/yuzu/aboutdialog.ui src/frontend_common/update_checker.cpp \
-                src/frontend_common/update_checker.h; then
-              REVIEW_REASON="Upstream changes touch the UI or updater used by the Yngchii proxy. Review compatibility before merging."
-            fi
-            git commit -m "chore(sync): merge upstream $UPSTREAM_TAG into Yngchii-X3D"
-            REVIEW_HEAD=HEAD
+            echo "Review required. See the upstream-sync-review artifact for the commits and conflicting paths." >> "$GITHUB_STEP_SUMMARY"
+            echo "review_artifact=true" >> "$GITHUB_OUTPUT"
+            echo "merge_status=review" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          REVIEW_REASON=
+          if ! git diff --cached --quiet "$YNGCHII_HEAD" -- \
+              src/yuzu/fritchii src/yuzu/main_window.cpp src/yuzu/main.ui \
+              src/yuzu/about_dialog.cpp src/yuzu/aboutdialog.ui src/frontend_common/update_checker.cpp \
+              src/frontend_common/update_checker.h src/qt_common/discord; then
+            REVIEW_REASON="Upstream changes touch the UI or updater used by the Yngchii proxy. Review compatibility before merging."
+          fi
+
+          # The restored version file is the previous base for changelog generation.
+          python3 .github/scripts/sync_release.py "$VERSION_NUM" "$UPSTREAM_TAG"
+          git add -- dist/frizti_version.txt CHANGELOG.md
+          git commit -m "chore(sync): merge upstream $UPSTREAM_TAG into Yngchii-X3D"
+          # The package overlays fork-owned files onto the upstream Windows asset.
+          echo "package_ref=$YNGCHII_HEAD" >> "$GITHUB_OUTPUT"
+
+          save_review_bundle() {
+            mkdir -p "$REVIEW_DIR"
+            git bundle create "$REVIEW_DIR/merge.bundle" HEAD "^$YNGCHII_HEAD"
+            git bundle verify "$REVIEW_DIR/merge.bundle"
+            printf 'Base: %s\nUpstream: %s\nMerge: %s\n%s\n' \
+              "$YNGCHII_HEAD" "$UPSTREAM_TAG" "$(git rev-parse HEAD)" "$1" > "$REVIEW_DIR/merge.txt"
+            echo "$1 The upstream-sync-review artifact contains the merge commit." >> "$GITHUB_STEP_SUMMARY"
+            echo "review_artifact=true" >> "$GITHUB_OUTPUT"
+            echo "merge_status=review" >> "$GITHUB_OUTPUT"
+          }
+
           if [ -n "$REVIEW_REASON" ]; then
-            BRANCH_NAME="sync/upstream-v${VERSION_NUM}"
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "$REVIEW_REASON" >> "$GITHUB_STEP_SUMMARY"
+              echo "merge_status=review" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            BRANCH_NAME="sync/upstream-v${VERSION_NUM}-${YNGCHII_HEAD:0:10}"
             OPEN_PR=$(gh pr list --head "$BRANCH_NAME" --base main --state open --json number --jq '.[0].number // empty')
             if [ -z "$OPEN_PR" ]; then
               if ! git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null; then
-                git push origin "$REVIEW_HEAD:refs/heads/$BRANCH_NAME"
+                if ! git push origin "HEAD:refs/heads/$BRANCH_NAME"; then
+                  save_review_bundle "GitHub rejected the review branch push."
+                  exit 0
+                fi
               fi
               if ! gh pr create --base main --head "$BRANCH_NAME" \
                 --title "Sync upstream $UPSTREAM_TAG into Yngchii-X3D" --body "$REVIEW_REASON"; then
@@ -143,29 +174,26 @@ jobs:
             exit 0
           fi
 
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && ! git push origin HEAD:main; then
+            save_review_bundle "GitHub rejected the main branch push."
+            exit 0
+          fi
           echo "merge_status=clean" >> "$GITHUB_OUTPUT"
 
-      - name: Record upstream version
-        if: steps.do_merge.outputs.merge_status == 'clean'
-        run: |
-          python3 .github/scripts/sync_release.py "${{ steps.upstream_info.outputs.version_num }}" "${{ steps.upstream_info.outputs.latest_upstream_tag }}"
-          git add dist/frizti_version.txt CHANGELOG.md
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(sync): record upstream version ${{ steps.upstream_info.outputs.version_num }}"
-          fi
-
-      - name: Push merged source
-        if: steps.do_merge.outputs.merge_status == 'clean'
-        id: push_main
-        run: |
-          git push origin HEAD:main
-          echo "merged_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: steps.do_merge.outputs.review_artifact == 'true'
+        with:
+          name: upstream-sync-review
+          path: ${{ runner.temp }}/upstream-review/
+          if-no-files-found: error
 
   package-windows:
     name: Build Windows x64 candidate
     needs: check-and-merge
-    if: needs.check-and-merge.outputs.merge_status == 'clean'
+    if: needs.check-and-merge.outputs.package_ref != ''
     runs-on: windows-latest
+    permissions:
+      contents: read
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -173,14 +201,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.check-and-merge.outputs.merged_sha }}
+          ref: ${{ needs.check-and-merge.outputs.package_ref }}
 
       - name: Install PE resource inspection dependency
         run: python -m pip install pefile
 
+      - name: Provision the LLVM-MinGW proxy toolchain
+        shell: pwsh
+        run: |
+          $name = 'llvm-mingw-20261020-ucrt-x86_64'
+          $archive = Join-Path $env:RUNNER_TEMP "$name.zip"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/$name.zip" -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive).Hash -ne 'FD5462B7F5D93B2FF981FCD3F9C7E427E47F3203C64EA91C27BCC444EEBD74CD') {
+            throw 'LLVM-MinGW toolchain checksum mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP
+          (Join-Path $env:RUNNER_TEMP "$name/bin") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Package Windows x64 candidate
         run: |
-          python .github/scripts/package_windows.py "${{ needs.check-and-merge.outputs.version_num }}" "${{ needs.check-and-merge.outputs.latest_upstream_tag }}" "yngchii-v${{ needs.check-and-merge.outputs.version_num }}"
+          python .github/scripts/package_windows.py "${{ needs.check-and-merge.outputs.version_num }}.1.1" "${{ needs.check-and-merge.outputs.latest_upstream_tag }}" "yngchii-v${{ needs.check-and-merge.outputs.version_num }}.1.1"
 
       - uses: actions/upload-artifact@v4
         with:
