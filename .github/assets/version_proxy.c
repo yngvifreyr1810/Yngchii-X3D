@@ -9,6 +9,9 @@
 #include <ctype.h>
 #include <time.h>
 #include <intrin.h>
+#include <math.h>
+#include <gdiplus.h>
+#include <shlwapi.h>
 
 #ifndef PROCESS_POWER_THROTTLING_CURRENT_VERSION
 #define PROCESS_POWER_THROTTLING_CURRENT_VERSION 1
@@ -166,6 +169,429 @@ static void SaveLanguagePreference(int is_vn) {
             fclose(f);
         }
     }
+}
+
+// ==============================================================================
+// 2B. THEME STATE & PREFERENCE STORAGE (F10 Cycling)
+// ==============================================================================
+typedef struct {
+    const char* name;
+    const char* accent;          // Hex accent, e.g. "#F97316"
+    const char* accent_dark;     // Pressed, e.g. "#EA580C"
+    const char* accent_light;    // Hover, e.g. "#FB923C"
+    const char* text_on_accent;  // Text color on play button, e.g. "#1C1433" or "#000000"
+    const char* glow_rgba;       // "rgba(249, 115, 22, 0.35)"
+    COLORREF ref_accent;         // RGB(249, 115, 22)
+    COLORREF ref_dark;           // RGB(234, 88, 12)
+    COLORREF ref_light;          // RGB(251, 146, 60)
+} ThemePalette;
+
+static ThemePalette g_palettes[4] = {
+    {"Chainsaw Crimson", "#b52c2f", "#962124", "#c93639", "#efead7", "rgba(181, 44, 47, 0.35)", RGB(181, 44, 47), RGB(150, 33, 36), RGB(201, 54, 57)},
+    {"Emerald Teal",   "#10B981", "#059669", "#34D399", "#064E3B", "rgba(16, 185, 129, 0.35)", RGB(16, 185, 129), RGB(5, 150, 105), RGB(52, 211, 153)},
+    {"Frost Cyan",     "#0EA5E9", "#0284C7", "#38BDF8", "#082F49", "rgba(14, 165, 233, 0.35)", RGB(14, 165, 233), RGB(2, 132, 199), RGB(56, 189, 248)},
+    {"Crimson Rose",   "#F43F5E", "#E11D48", "#FB7185", "#4C0519", "rgba(244, 63, 94, 0.35)", RGB(244, 63, 94), RGB(225, 29, 72), RGB(251, 113, 133)}
+};
+
+static void UpdateInternalFritchiiAccent(int theme_idx) {
+    if (theme_idx < 0 || theme_idx >= 4) return;
+    HMODULE hExe = GetModuleHandleW(NULL);
+    if (!hExe) return;
+    BYTE* base = (BYTE*)hExe;
+    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
+    const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    const DWORD accent_rva = 0x222d386;
+    if (nt->OptionalHeader.SizeOfImage < accent_rva + 6) return;
+
+    BYTE* accent = base + accent_rva;
+    const BYTE stock_color[] = {0xa7, 0xa7, 0x8b, 0x8b, 0xfa, 0xfa};
+    bool known_color = memcmp(accent, stock_color, sizeof(stock_color)) == 0;
+    for (const ThemePalette& palette : g_palettes) {
+        BYTE r = GetRValue(palette.ref_accent);
+        BYTE g = GetGValue(palette.ref_accent);
+        BYTE b = GetBValue(palette.ref_accent);
+        const BYTE color[] = {r, r, g, g, b, b};
+        if (memcmp(accent, color, sizeof(color)) == 0) known_color = true;
+    }
+    // This address belongs to the stock v5.6 executable's theme string.
+    if (!known_color) return;
+
+    DWORD oldProtect;
+    if (VirtualProtect(accent, 6, PAGE_READWRITE, &oldProtect)) {
+        COLORREF col = g_palettes[theme_idx].ref_accent;
+        BYTE r = GetRValue(col);
+        BYTE g = GetGValue(col);
+        BYTE b = GetBValue(col);
+        const BYTE color[] = {r, r, g, g, b, b};
+        memcpy(accent, color, sizeof(color));
+        VirtualProtect(accent, 6, oldProtect, &oldProtect);
+    }
+}
+
+static volatile int g_theme_idx = 0; // 0=Amber, 1=Emerald, 2=Cyan, 3=Crimson
+
+static int LoadThemePreference(void) {
+    char appdata[MAX_PATH] = {0};
+    if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), "%s\\eden\\config\\yngchii_theme.cfg", appdata);
+        FILE* f = fopen(path, "r");
+        if (f) {
+            int t = 0;
+            if (fscanf(f, "%d", &t) == 1 && t >= 0 && t <= 3) {
+                fclose(f);
+                return t;
+            }
+            fclose(f);
+        }
+    }
+    return 0; // Default: Amber Gold
+}
+
+static void SaveThemePreference(int t) {
+    char appdata[MAX_PATH] = {0};
+    if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
+        char dir[MAX_PATH];
+        snprintf(dir, sizeof(dir), "%s\\eden\\config", appdata);
+        CreateDirectoryA(dir, NULL);
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), "%s\\eden\\config\\yngchii_theme.cfg", appdata);
+        FILE* f = fopen(path, "w");
+        if (f) {
+            fprintf(f, "%d\n", t);
+            fclose(f);
+        }
+    }
+}
+
+// ==============================================================================
+// 2C. GDI+ IMAGE PROCESSING (Fast Box Blur & Rounded Covers)
+// ==============================================================================
+static void BlurBoxH(BYTE* src, BYTE* dst, int w, int h, int r) {
+    float iarr = 1.0f / (r + r + 1);
+    for (int y = 0; y < h; y++) {
+        int ti = y * w * 3;
+        int li = ti;
+        int ri = ti + r * 3;
+        int fv_r = src[ti], fv_g = src[ti+1], fv_b = src[ti+2];
+        int lv_r = src[ti + (w-1)*3], lv_g = src[ti + (w-1)*3 + 1], lv_b = src[ti + (w-1)*3 + 2];
+        int val_r = (r + 1) * fv_r, val_g = (r + 1) * fv_g, val_b = (r + 1) * fv_b;
+        for (int j = 0; j < r; j++) {
+            val_r += src[ti + j*3];
+            val_g += src[ti + j*3 + 1];
+            val_b += src[ti + j*3 + 2];
+        }
+        for (int j = 0; j <= r; j++) {
+            val_r += src[ri] - fv_r;
+            val_g += src[ri+1] - fv_g;
+            val_b += src[ri+2] - fv_b;
+            dst[ti] = (BYTE)(val_r * iarr);
+            dst[ti+1] = (BYTE)(val_g * iarr);
+            dst[ti+2] = (BYTE)(val_b * iarr);
+            ri += 3; ti += 3;
+        }
+        for (int j = r + 1; j < w - r; j++) {
+            val_r += src[ri] - src[li];
+            val_g += src[ri+1] - src[li+1];
+            val_b += src[ri+2] - src[li+2];
+            dst[ti] = (BYTE)(val_r * iarr);
+            dst[ti+1] = (BYTE)(val_g * iarr);
+            dst[ti+2] = (BYTE)(val_b * iarr);
+            ri += 3; li += 3; ti += 3;
+        }
+        for (int j = w - r; j < w; j++) {
+            val_r += lv_r - src[li];
+            val_g += lv_g - src[li+1];
+            val_b += lv_b - src[li+2];
+            dst[ti] = (BYTE)(val_r * iarr);
+            dst[ti+1] = (BYTE)(val_g * iarr);
+            dst[ti+2] = (BYTE)(val_b * iarr);
+            li += 3; ti += 3;
+        }
+    }
+}
+
+static void BlurBoxV(BYTE* src, BYTE* dst, int w, int h, int r) {
+    float iarr = 1.0f / (r + r + 1);
+    for (int x = 0; x < w; x++) {
+        int ti = x * 3;
+        int li = ti;
+        int ri = ti + r * w * 3;
+        int fv_r = src[ti], fv_g = src[ti+1], fv_b = src[ti+2];
+        int lv_r = src[ti + (h-1)*w*3], lv_g = src[ti + (h-1)*w*3 + 1], lv_b = src[ti + (h-1)*w*3 + 2];
+        int val_r = (r + 1) * fv_r, val_g = (r + 1) * fv_g, val_b = (r + 1) * fv_b;
+        for (int j = 0; j < r; j++) {
+            val_r += src[ti + j*w*3];
+            val_g += src[ti + j*w*3 + 1];
+            val_b += src[ti + j*w*3 + 2];
+        }
+        for (int j = 0; j <= r; j++) {
+            val_r += src[ri] - fv_r;
+            val_g += src[ri+1] - fv_g;
+            val_b += src[ri+2] - fv_b;
+            dst[ti] = (BYTE)(val_r * iarr);
+            dst[ti+1] = (BYTE)(val_g * iarr);
+            dst[ti+2] = (BYTE)(val_b * iarr);
+            ri += w*3; ti += w*3;
+        }
+        for (int j = r + 1; j < h - r; j++) {
+            val_r += src[ri] - src[li];
+            val_g += src[ri+1] - src[li+1];
+            val_b += src[ri+2] - src[li+2];
+            dst[ti] = (BYTE)(val_r * iarr);
+            dst[ti+1] = (BYTE)(val_g * iarr);
+            dst[ti+2] = (BYTE)(val_b * iarr);
+            ri += w*3; li += w*3; ti += w*3;
+        }
+        for (int j = h - r; j < h; j++) {
+            val_r += lv_r - src[li];
+            val_g += lv_g - src[li+1];
+            val_b += lv_b - src[li+2];
+            dst[ti] = (BYTE)(val_r * iarr);
+            dst[ti+1] = (BYTE)(val_g * iarr);
+            dst[ti+2] = (BYTE)(val_b * iarr);
+            li += w*3; ti += w*3;
+        }
+    }
+}
+
+static bool StartGdiPlus(ULONG_PTR* token) {
+    // Resolve the delay-loaded library only when a cover needs it.
+    static const HMODULE module = LoadLibraryExW(L"gdiplus.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!module) return false;
+
+    Gdiplus::GdiplusStartupInput input;
+    return Gdiplus::GdiplusStartup(token, &input, NULL) == Gdiplus::Ok;
+}
+
+static int GenerateBlurredHeroBackdrop(const wchar_t* src_file, const wchar_t* out_file, int bw, int bh) {
+    if (bw < 200) bw = 1216;
+    if (bh < 50) bh = 212;
+
+    ULONG_PTR gdi_token = 0;
+    if (!StartGdiPlus(&gdi_token)) return 0;
+
+    Gdiplus::GpBitmap* src_bmp = NULL;
+    Gdiplus::DllExports::GdipCreateBitmapFromFile(src_file, &src_bmp);
+    if (!src_bmp) {
+        Gdiplus::GdiplusShutdown(gdi_token);
+        return 0;
+    }
+
+    UINT src_w = 0, src_h = 0;
+    Gdiplus::DllExports::GdipGetImageWidth(src_bmp, &src_w);
+    Gdiplus::DllExports::GdipGetImageHeight(src_bmp, &src_h);
+
+    float target_aspect = (float)bw / (float)bh;
+    float src_aspect = (float)src_w / (float)src_h;
+    int crop_x = 0, crop_y = 0, crop_w = src_w, crop_h = src_h;
+
+    if (src_aspect < target_aspect) {
+        crop_w = src_w;
+        crop_h = (int)(src_w / target_aspect);
+        crop_x = 0;
+        crop_y = (int)((src_h - crop_h) * 0.35f);
+        if (crop_y < 0) crop_y = 0;
+        if (crop_y + crop_h > (int)src_h) crop_h = src_h - crop_y;
+    } else {
+        crop_h = src_h;
+        crop_w = (int)(src_h * target_aspect);
+        crop_y = 0;
+        crop_x = (src_w - crop_w) / 2;
+        if (crop_x < 0) crop_x = 0;
+        if (crop_x + crop_w > (int)src_w) crop_w = src_w - crop_x;
+    }
+
+    int sw = 360, sh = (int)(360.0f * (float)bh / (float)bw);
+    if (sh < 68) sh = 68;
+    Gdiplus::GpBitmap* small_bmp = NULL;
+    Gdiplus::DllExports::GdipCreateBitmapFromScan0(sw, sh, 0, PixelFormat24bppRGB, NULL, &small_bmp);
+    Gdiplus::GpGraphics* gfx = NULL;
+    Gdiplus::DllExports::GdipGetImageGraphicsContext(small_bmp, &gfx);
+    Gdiplus::DllExports::GdipSetInterpolationMode(gfx, Gdiplus::InterpolationModeHighQualityBilinear);
+    Gdiplus::DllExports::GdipDrawImageRectRectI(gfx, src_bmp, 0, 0, sw, sh, crop_x, crop_y, crop_w, crop_h, Gdiplus::UnitPixel, NULL, NULL, NULL);
+    Gdiplus::DllExports::GdipDeleteGraphics(gfx);
+    Gdiplus::DllExports::GdipDisposeImage(src_bmp);
+
+    Gdiplus::BitmapData bdata;
+    Gdiplus::Rect lock_rc = {0, 0, sw, sh};
+    Gdiplus::DllExports::GdipBitmapLockBits(small_bmp, &lock_rc, Gdiplus::ImageLockModeRead, PixelFormat24bppRGB, &bdata);
+    BYTE* raw_rgb = (BYTE*)malloc(sw * sh * 3);
+    BYTE* buf2 = (BYTE*)malloc(sw * sh * 3);
+    if (!raw_rgb || !buf2) {
+        if (raw_rgb) free(raw_rgb);
+        if (buf2) free(buf2);
+        Gdiplus::DllExports::GdipBitmapUnlockBits(small_bmp, &bdata);
+        Gdiplus::DllExports::GdipDisposeImage(small_bmp);
+        Gdiplus::GdiplusShutdown(gdi_token);
+        return 0;
+    }
+    for (int y = 0; y < sh; y++) {
+        memcpy(raw_rgb + y * sw * 3, (BYTE*)bdata.Scan0 + y * bdata.Stride, sw * 3);
+    }
+    Gdiplus::DllExports::GdipBitmapUnlockBits(small_bmp, &bdata);
+    Gdiplus::DllExports::GdipDisposeImage(small_bmp);
+
+    for (int pass = 0; pass < 2; pass++) {
+        BlurBoxH(raw_rgb, buf2, sw, sh, 3);
+        BlurBoxV(buf2, raw_rgb, sw, sh, 3);
+    }
+    free(buf2);
+
+    DWORD* argb = (DWORD*)malloc(bw * bh * 4);
+    if (!argb) {
+        free(raw_rgb);
+        Gdiplus::GdiplusShutdown(gdi_token);
+        return 0;
+    }
+
+    BYTE bg_r = 0x12, bg_g = 0x12, bg_b = 0x17;
+    int corner_r = 16;
+
+    for (int y = 0; y < bh; y++) {
+        float sy = (y / (float)bh) * (sh - 1);
+        int y0 = (int)sy;
+        int y1 = (y0 + 1 < sh) ? y0 + 1 : y0;
+        float dy = sy - y0;
+
+        for (int x = 0; x < bw; x++) {
+            float sx = (x / (float)bw) * (sw - 1);
+            int x0 = (int)sx;
+            int x1 = (x0 + 1 < sw) ? x0 + 1 : x0;
+            float dx = sx - x0;
+
+            BYTE* p00 = &raw_rgb[(y0 * sw + x0) * 3];
+            BYTE* p10 = &raw_rgb[(y0 * sw + x1) * 3];
+            BYTE* p01 = &raw_rgb[(y1 * sw + x0) * 3];
+            BYTE* p11 = &raw_rgb[(y1 * sw + x1) * 3];
+
+            float r_top = p00[2] * (1.0f - dx) + p10[2] * dx;
+            float g_top = p00[1] * (1.0f - dx) + p10[1] * dx;
+            float b_top = p00[0] * (1.0f - dx) + p10[0] * dx;
+
+            float r_bot = p01[2] * (1.0f - dx) + p11[2] * dx;
+            float g_bot = p01[1] * (1.0f - dx) + p11[1] * dx;
+            float b_bot = p01[0] * (1.0f - dx) + p11[0] * dx;
+
+            float art_r = r_top * (1.0f - dy) + r_bot * dy;
+            float art_g = g_top * (1.0f - dy) + g_bot * dy;
+            float art_b = b_top * (1.0f - dy) + b_bot * dy;
+
+            int corner_dx = 0, corner_dy = 0;
+            int in_corner = 0;
+            if (x < corner_r && y < corner_r) { corner_dx = corner_r - x; corner_dy = corner_r - y; in_corner = 1; }
+            else if (x >= bw - corner_r && y < corner_r) { corner_dx = x - (bw - corner_r - 1); corner_dy = corner_r - y; in_corner = 1; }
+            else if (x < corner_r && y >= bh - corner_r) { corner_dx = corner_r - x; corner_dy = y - (bh - corner_r - 1); in_corner = 1; }
+            else if (x >= bw - corner_r && y >= bh - corner_r) { corner_dx = x - (bw - corner_r - 1); corner_dy = y - (bh - corner_r - 1); in_corner = 1; }
+
+            int alpha = 255;
+            float dist = 0.0f;
+            if (in_corner) {
+                dist = sqrtf((float)(corner_dx * corner_dx + corner_dy * corner_dy));
+                if (dist > corner_r) {
+                    alpha = 0;
+                } else if (dist > corner_r - 1.0f) {
+                    alpha = (int)(255.0f * (corner_r - dist));
+                }
+            }
+
+            if (alpha == 0) {
+                argb[y * bw + x] = 0;
+                continue;
+            }
+
+            float pct_x = x / (float)bw;
+            float dark_ratio;
+            if (pct_x < 0.50f) {
+                dark_ratio = 0.62f - 0.12f * (pct_x / 0.50f);
+            } else {
+                dark_ratio = 0.50f - 0.08f * ((pct_x - 0.50f) / 0.50f);
+            }
+
+            float pct_y = y / (float)bh;
+            float edge_y = (pct_y < 0.5f ? pct_y : 1.0f - pct_y) * 2.0f;
+            if (edge_y < 0.15f) {
+                dark_ratio += (0.15f - edge_y) * 0.3f;
+            }
+            if (dark_ratio < 0.35f) dark_ratio = 0.35f;
+            if (dark_ratio > 0.75f) dark_ratio = 0.75f;
+            float art_ratio = 1.0f - dark_ratio;
+
+            int fr = (int)(bg_r * dark_ratio + art_r * art_ratio);
+            int fg = (int)(bg_g * dark_ratio + art_g * art_ratio);
+            int fb = (int)(bg_b * dark_ratio + art_b * art_ratio);
+
+            // Subtle 1px border rgba(255,255,255, 0.10)
+            if (x == 0 || x == bw - 1 || y == 0 || y == bh - 1 || (in_corner && fabsf(dist - (corner_r - 0.5f)) < 1.0f)) {
+                fr = (fr + 20 > 255) ? 255 : fr + 20;
+                fg = (fg + 20 > 255) ? 255 : fg + 20;
+                fb = (fb + 25 > 255) ? 255 : fb + 25;
+            }
+
+            argb[y * bw + x] = ((DWORD)alpha << 24) | ((DWORD)fr << 16) | ((DWORD)fg << 8) | (DWORD)fb;
+        }
+    }
+    free(raw_rgb);
+
+    Gdiplus::GpBitmap* out_bmp = NULL;
+    Gdiplus::DllExports::GdipCreateBitmapFromScan0(bw, bh, bw * 4, PixelFormat32bppARGB, (BYTE*)argb, &out_bmp);
+    CLSID pngClsid;
+    CLSIDFromString(L"{557CF406-1A04-11D3-9A73-0000F81EF32E}", &pngClsid);
+    Gdiplus::DllExports::GdipSaveImageToFile(out_bmp, out_file, &pngClsid, NULL);
+    Gdiplus::DllExports::GdipDisposeImage(out_bmp);
+    free(argb);
+
+    Gdiplus::GdiplusShutdown(gdi_token);
+    return 1;
+}
+
+static int GenerateRoundedCoverIcon(const wchar_t* src_file, const wchar_t* out_file, int sz, int cr) {
+    ULONG_PTR gdi_token = 0;
+    if (!StartGdiPlus(&gdi_token)) return 0;
+
+    Gdiplus::GpBitmap* src_bmp = NULL;
+    Gdiplus::DllExports::GdipCreateBitmapFromFile(src_file, &src_bmp);
+    if (!src_bmp) {
+        Gdiplus::GdiplusShutdown(gdi_token);
+        return 0;
+    }
+
+    Gdiplus::GpBitmap* out_bmp = NULL;
+    Gdiplus::DllExports::GdipCreateBitmapFromScan0(sz, sz, 0, PixelFormat32bppARGB, NULL, &out_bmp);
+    Gdiplus::GpGraphics* gfx = NULL;
+    Gdiplus::DllExports::GdipGetImageGraphicsContext(out_bmp, &gfx);
+    Gdiplus::DllExports::GdipSetInterpolationMode(gfx, Gdiplus::InterpolationModeHighQualityBicubic);
+    Gdiplus::DllExports::GdipSetSmoothingMode(gfx, Gdiplus::SmoothingModeAntiAlias);
+
+    Gdiplus::GpPath* path = NULL;
+    Gdiplus::DllExports::GdipCreatePath(Gdiplus::FillModeAlternate, &path);
+    int d = cr * 2;
+    Gdiplus::DllExports::GdipAddPathArcI(path, 0, 0, d, d, 180, 90);
+    Gdiplus::DllExports::GdipAddPathArcI(path, sz - d, 0, d, d, 270, 90);
+    Gdiplus::DllExports::GdipAddPathArcI(path, sz - d, sz - d, d, d, 0, 90);
+    Gdiplus::DllExports::GdipAddPathArcI(path, 0, sz - d, d, d, 90, 90);
+    Gdiplus::DllExports::GdipClosePathFigure(path);
+
+    Gdiplus::DllExports::GdipSetClipPath(gfx, path, Gdiplus::CombineModeReplace);
+    Gdiplus::DllExports::GdipDrawImageRectI(gfx, src_bmp, 0, 0, sz, sz);
+    Gdiplus::DllExports::GdipResetClip(gfx);
+
+    Gdiplus::GpPen* pen = NULL;
+    Gdiplus::DllExports::GdipCreatePen1(0x33FFFFFF, 1.0f, Gdiplus::UnitPixel, &pen);
+    Gdiplus::DllExports::GdipDrawPath(gfx, pen, path);
+    Gdiplus::DllExports::GdipDeletePen(pen);
+
+    Gdiplus::DllExports::GdipDeletePath(path);
+    Gdiplus::DllExports::GdipDeleteGraphics(gfx);
+    Gdiplus::DllExports::GdipDisposeImage(src_bmp);
+
+    CLSID pngClsid;
+    CLSIDFromString(L"{557CF406-1A04-11D3-9A73-0000F81EF32E}", &pngClsid);
+    Gdiplus::DllExports::GdipSaveImageToFile(out_bmp, out_file, &pngClsid, NULL);
+    Gdiplus::DllExports::GdipDisposeImage(out_bmp);
+
+    Gdiplus::GdiplusShutdown(gdi_token);
+    return 1;
 }
 
 typedef struct {
@@ -436,23 +862,20 @@ static void HookIAT(HMODULE hTargetModule, const char* targetDll, const char* fu
     for (; impDesc->Name != 0; impDesc++) {
         char* name = (char*)(base + impDesc->Name);
         if (_stricmp(name, targetDll) == 0) {
+            if (!impDesc->OriginalFirstThunk || !impDesc->FirstThunk) return;
             IMAGE_THUNK_DATA* origThunk = (IMAGE_THUNK_DATA*)(base + impDesc->OriginalFirstThunk);
             IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)(base + impDesc->FirstThunk);
-            if (!impDesc->OriginalFirstThunk) origThunk = thunk;
 
             for (; origThunk->u1.AddressOfData != 0; origThunk++, thunk++) {
                 if (!(origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)) {
                     IMAGE_IMPORT_BY_NAME* impByName = (IMAGE_IMPORT_BY_NAME*)(base + origThunk->u1.AddressOfData);
                     if (strcmp((char*)impByName->Name, funcName) == 0) {
-                        if (*origFunc == NULL) {
-                            *origFunc = (void*)thunk->u1.Function;
-                        }
-                        if ((void*)thunk->u1.Function != newFunc) {
-                            DWORD oldProtect;
-                            VirtualProtect(&thunk->u1.Function, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect);
-                            thunk->u1.Function = (ULONG_PTR)newFunc;
-                            VirtualProtect(&thunk->u1.Function, sizeof(void*), oldProtect, &oldProtect);
-                        }
+                        if (!thunk->u1.Function || (void*)thunk->u1.Function == newFunc) return;
+                        DWORD oldProtect;
+                        if (!VirtualProtect(&thunk->u1.Function, sizeof(void*), PAGE_READWRITE, &oldProtect)) return;
+                        *origFunc = (void*)thunk->u1.Function;
+                        thunk->u1.Function = (ULONG_PTR)newFunc;
+                        VirtualProtect(&thunk->u1.Function, sizeof(void*), oldProtect, &oldProtect);
                         return;
                     }
                 }
@@ -460,6 +883,10 @@ static void HookIAT(HMODULE hTargetModule, const char* targetDll, const char* fu
         }
     }
 }
+
+typedef void* (*pfn_QMenu_exec)(void* this_ptr, const void* pos, void* action);
+static pfn_QMenu_exec s_orig_QMenu_exec = NULL;
+static void* Hook_QMenu_exec(void* this_ptr, const void* pos, void* action);
 
 static void InstallQt6IATHooks(void) {
     HMODULE hExe = GetModuleHandleW(NULL);
@@ -470,6 +897,7 @@ static void InstallQt6IATHooks(void) {
     HookIAT(hExe, "Qt6Core.dll", "?tr@QObject@@SA?AVQString@@PEBD0H@Z", (void*)Hook_tr, (void**)&s_orig_tr);
     HookIAT(hExe, "Qt6Core.dll", "?fromUtf8@QString@@SA?AV1@V?$QBasicUtf8StringView@D@@@Z", (void*)Hook_fromUtf8, (void**)&s_orig_fromUtf8);
     HookIAT(hExe, "Qt6Core.dll", "?fromLatin1@QString@@SA?AV1@V?$QBasicLatin1StringView@D@@@Z", (void*)Hook_fromLatin1, (void**)&s_orig_fromLatin1);
+    HookIAT(hExe, "Qt6Widgets.dll", "?exec@QMenu@@QEAAPEAVQAction@@AEBVQPoint@@PEAV2@@Z", (void*)Hook_QMenu_exec, (void**)&s_orig_QMenu_exec);
 }
 
 // ==============================================================================
@@ -535,6 +963,8 @@ typedef void (*pfn_tab_setText)(void* this_ptr, int index, const void* qstr_ptr)
 typedef void* (*pfn_actions)(void* this_ptr, void* ret_qlist);
 typedef void* (*pfn_act_text)(void* this_ptr, void* ret_qstr);
 typedef void (*pfn_act_setText)(void* this_ptr, const void* qstr_ptr);
+typedef void (*pfn_act_trigger)(void* this_ptr);
+typedef void (*pfn_act_activate)(void* this_ptr, int action_event);
 
 typedef void* (*pfn_view_model)(void* view_this);
 typedef void* (*pfn_model_root)(void* model_this);
@@ -557,6 +987,16 @@ typedef void (*pfn_setWidget)(void* this_ptr, void* widget);
 typedef void (*pfn_setWidgetResizable)(void* this_ptr, char resizable);
 typedef void (*pfn_setFrameShape)(void* this_ptr, int shape);
 typedef void (*pfn_setScrollBarPolicy)(void* this_ptr, int policy);
+
+typedef const void* (*pfn_geometry)(void* this_ptr);
+typedef void (*pfn_setGeometry)(void* this_ptr, int x, int y, int w, int h);
+typedef void (*pfn_lower)(void* this_ptr);
+typedef void (*pfn_setScaledContents)(void* label_this, char scaled);
+typedef void (*pfn_pixmap_ctor_file)(void* this_ptr, const void* qstr_file, const char* format, int flags);
+typedef void (*pfn_qicon_ctor_file)(void* this_ptr, const void* qstr_file);
+typedef void (*pfn_qicon_ctor_pixmap)(void* this_ptr, const void* qpixmap);
+typedef void (*pfn_qicon_dtor)(void* this_ptr);
+typedef void (*pfn_setIcon)(void* this_ptr, const void* qicon_ptr);
 
 // QLayout / QBoxLayout
 typedef void (*pfn_removeWidget)(void* layout_ptr, void* widget);
@@ -583,6 +1023,16 @@ typedef struct {
     int64_t size;
 } Qt6List;
 typedef const Qt6List* (*pfn_children)(const void* obj_this);
+
+typedef void* (*pfn_btn_ctor)(void* this_ptr, void* parent);
+typedef void* (*pfn_toolbtn_ctor)(void* this_ptr, void* parent);
+typedef void (*pfn_btn_click)(void* this_ptr);
+typedef bool (*pfn_is_visible)(void* this_ptr);
+typedef int (*pfn_event_type)(void* event_ptr);
+typedef void* (*pfn_parent_widget)(void* this_ptr);
+typedef void (*pfn_cmevent_ctor)(void* this_ptr, int reason, const int* pos);
+typedef void (*pfn_cmevent_dtor)(void* this_ptr);
+typedef bool (*pfn_send_event)(void* receiver, void* event);
 
 static pfn_allWidgets s_pfn_allWidgets = NULL;
 static pfn_inherits s_pfn_inherits = NULL;
@@ -621,6 +1071,8 @@ static pfn_tab_setText s_pfn_tab_setText = NULL;
 static pfn_actions s_pfn_actions = NULL;
 static pfn_act_text s_pfn_act_text = NULL;
 static pfn_act_setText s_pfn_act_setText = NULL;
+static pfn_act_trigger s_pfn_act_trigger = NULL;
+static pfn_act_activate s_pfn_act_activate = NULL;
 
 static pfn_view_model s_pfn_view_model = NULL;
 static pfn_model_root s_pfn_model_root = NULL;
@@ -643,6 +1095,21 @@ static pfn_setWidgetResizable s_pfn_setWidgetResizable = NULL;
 static pfn_setFrameShape s_pfn_setFrameShape = NULL;
 static pfn_setScrollBarPolicy s_pfn_setHScrollBarPolicy = NULL;
 static pfn_setScrollBarPolicy s_pfn_setVScrollBarPolicy = NULL;
+static pfn_geometry s_pfn_geometry = NULL;
+static pfn_setGeometry s_pfn_setGeometry = NULL;
+static pfn_lower s_pfn_lower = NULL;
+static pfn_setScaledContents s_pfn_setScaledContents = NULL;
+static pfn_pixmap_ctor_file s_pfn_pixmap_ctor_file = NULL;
+static pfn_qicon_ctor_file s_pfn_qicon_ctor_file = NULL;
+static pfn_qicon_ctor_pixmap s_pfn_qicon_ctor_pixmap = NULL;
+static pfn_qicon_dtor s_pfn_qicon_dtor = NULL;
+static pfn_setIcon s_pfn_setIcon = NULL;
+
+static void* s_hero_backdrop = NULL;
+static char s_last_hero_title[256] = {0};
+static int s_last_backdrop_w = 0;
+static char s_hero_backdrop_pix[64] = {0};
+static int s_hero_backdrop_pix_inited = 0;
 
 static pfn_removeWidget s_pfn_removeWidget = NULL;
 static pfn_insertWidget s_pfn_insertWidget = NULL;
@@ -661,6 +1128,244 @@ static pfn_hide s_pfn_hide = NULL;
 static pfn_show s_pfn_show = NULL;
 static pfn_setObjectName s_pfn_setObjectName = NULL;
 static pfn_children s_pfn_children = NULL;
+
+static pfn_btn_ctor s_pfn_btn_ctor = NULL;
+static pfn_toolbtn_ctor s_pfn_toolbtn_ctor = NULL;
+static pfn_btn_click s_pfn_btn_click = NULL;
+static pfn_is_visible s_pfn_isVisible = NULL;
+static pfn_event_type s_pfn_event_type = NULL;
+static pfn_cmevent_ctor s_pfn_cmevent_ctor = NULL;
+static pfn_cmevent_dtor s_pfn_cmevent_dtor = NULL;
+static pfn_send_event s_pfn_sendEvent = NULL;
+
+static void* s_btn_configure = NULL;
+static void* s_orig_btn_vtable = NULL;
+static void* s_cfg_btn_vtable[256];
+static volatile int s_direct_configure_game = 0;
+
+static void EnsureQMenuActionFuncs(void) {
+    if (!s_pfn_actions) {
+        HMODULE hWidgets = GetModuleHandleW(L"Qt6Widgets.dll");
+        if (hWidgets) {
+            s_pfn_actions = (pfn_actions)GetProcAddress(hWidgets, "?actions@QWidget@@QEBA?AV?$QList@PEAVQAction@@@@XZ");
+        }
+    }
+    if (!s_pfn_act_text || !s_pfn_act_trigger) {
+        HMODULE hGui = GetModuleHandleW(L"Qt6Gui.dll");
+        if (hGui) {
+            if (!s_pfn_act_text) s_pfn_act_text = (pfn_act_text)GetProcAddress(hGui, "?iconText@QAction@@QEBA?AVQString@@XZ");
+            if (!s_pfn_act_text) s_pfn_act_text = (pfn_act_text)GetProcAddress(hGui, "?text@QAction@@QEBA?AVQString@@XZ");
+            if (!s_pfn_act_trigger) s_pfn_act_trigger = (pfn_act_trigger)GetProcAddress(hGui, "?trigger@QAction@@QEAAXXZ");
+            if (!s_pfn_act_activate) s_pfn_act_activate = (pfn_act_activate)GetProcAddress(hGui, "?activate@QAction@@QEAAXW4ActionEvent@1@@Z");
+        }
+    }
+    if (!s_pfn_toUtf8 || !s_pfn_constData || !s_pfn_dtor) {
+        HMODULE hCore = GetModuleHandleW(L"Qt6Core.dll");
+        if (hCore) {
+            if (!s_pfn_toUtf8) s_pfn_toUtf8 = (pfn_toUtf8_fn)GetProcAddress(hCore, "?toUtf8@QString@@QEGBA?AVQByteArray@@XZ");
+            if (!s_pfn_toUtf8) s_pfn_toUtf8 = (pfn_toUtf8_fn)GetProcAddress(hCore, "?toUtf8@QString@@QEHAA?AVQByteArray@@XZ");
+            if (!s_pfn_constData) s_pfn_constData = (pfn_constData_fn)GetProcAddress(hCore, "?constData@QByteArray@@QEBAPEBDXZ");
+            if (!s_pfn_dtor) s_pfn_dtor = (pfn_str_dtor_fn)GetProcAddress(hCore, "??1QString@@QEAA@XZ");
+            if (!s_pfn_qba_dtor) s_pfn_qba_dtor = (pfn_qba_dtor_fn)GetProcAddress(hCore, "??1QByteArray@@QEAA@XZ");
+        }
+    }
+}
+
+static void* Hook_QMenu_exec(void* this_ptr, const void* pos, void* action) {
+    if (s_direct_configure_game) {
+        s_direct_configure_game = 0;
+        EnsureQMenuActionFuncs();
+        if (this_ptr && s_pfn_actions && (s_pfn_act_activate || s_pfn_act_trigger)) {
+            struct {
+                void* d;
+                void** ptr;
+                int64_t size;
+            } act_list;
+            memset(&act_list, 0, sizeof(act_list));
+            s_pfn_actions(this_ptr, &act_list);
+            if (act_list.ptr && act_list.size > 0) {
+                void* target_act = NULL;
+                for (int64_t a = 0; a < act_list.size; a++) {
+                    void* act = act_list.ptr[a];
+                    if (!act) continue;
+
+                    int is_target = 0;
+                    void* d_ptr = act ? *(void**)((char*)act + 8) : NULL;
+                    if (d_ptr) {
+                        const wchar_t* w1 = *(const wchar_t**)((char*)d_ptr + 0x88 + 8);
+                        int64_t len1 = *(int64_t*)((char*)d_ptr + 0x88 + 16);
+                        if (w1 && len1 > 0) {
+                            if ((wcsstr(w1, L"Configure") || wcsstr(w1, L"Config") || wcsstr(w1, L"C\x1ea5u h\x00ecnh") || wcsstr(w1, L"C\xe0i \x0111\x1eb7t") || wcsstr(w1, L"Settings")) &&
+                                !wcsstr(w1, L"without") && !wcsstr(w1, L"kh\xf4ng") && !wcsstr(w1, L"ri\xeang")) {
+                                is_target = 1;
+                            }
+                        }
+                    }
+                    char act_qstr[32] = {0};
+                    if (s_pfn_act_text) {
+                        s_pfn_act_text(act, act_qstr);
+                        const wchar_t* wtext = *(const wchar_t**)(act_qstr + 8);
+                        int64_t wlen = *(int64_t*)(act_qstr + 16);
+                        if (wtext && wlen > 0) {
+                            if ((wcsstr(wtext, L"Configure") || wcsstr(wtext, L"Config") || wcsstr(wtext, L"C\x1ea5u h\x00ecnh") || wcsstr(wtext, L"C\xe0i \x0111\x1eb7t") || wcsstr(wtext, L"Settings")) &&
+                                !wcsstr(wtext, L"without") && !wcsstr(wtext, L"kh\xf4ng") && !wcsstr(wtext, L"ri\xeang")) {
+                                is_target = 1;
+                            }
+                        }
+                    }
+
+                    if (!is_target && s_pfn_toUtf8 && s_pfn_constData) {
+                        char act_qba[32] = {0};
+                        s_pfn_toUtf8(act_qstr, act_qba);
+                        const char* act_text = s_pfn_constData(act_qba);
+                        if (act_text && act_text[0] != '\0') {
+                            if ((strstr(act_text, "Configure") || strstr(act_text, "Config") || strstr(act_text, "Cấu hình") || strstr(act_text, "C?u h") || strstr(act_text, "Settings") || strstr(act_text, "Cài đặt")) &&
+                                !strstr(act_text, "without") && !strstr(act_text, "không") && !strstr(act_text, "kh?ng") && !strstr(act_text, "riêng")) {
+                                is_target = 1;
+                            }
+                        }
+                        if (s_pfn_qba_dtor) s_pfn_qba_dtor(act_qba);
+                    }
+                    if (s_pfn_dtor) s_pfn_dtor(act_qstr);
+
+                    if (is_target) {
+                        target_act = act;
+                        break;
+                    }
+                }
+                if (target_act) {
+                    if (s_pfn_act_activate) {
+                        s_pfn_act_activate(target_act, 0);
+                    } else if (s_pfn_act_trigger) {
+                        s_pfn_act_trigger(target_act);
+                    }
+                    return target_act;
+                }
+            }
+        }
+        return NULL;
+    }
+    return s_orig_QMenu_exec ? s_orig_QMenu_exec(this_ptr, pos, action) : NULL;
+}
+
+typedef bool (*pfn_event_orig)(void*, void*);
+static bool ConfigureBtnEventHook(void* this_ptr, void* event_ptr) {
+    if (!this_ptr || !event_ptr) return false;
+    int ev_type = 0;
+    if (s_pfn_event_type) {
+        ev_type = s_pfn_event_type(event_ptr);
+    }
+    pfn_event_orig orig = s_orig_btn_vtable ? (pfn_event_orig)((void**)s_orig_btn_vtable)[4] : NULL;
+    bool res = orig ? orig(this_ptr, event_ptr) : false;
+
+    if (ev_type == 3) { // QEvent::MouseButtonRelease
+        void* page = s_pfn_parentWidget ? s_pfn_parentWidget(this_ptr) : NULL;
+        if (page && s_pfn_cmevent_ctor && s_pfn_sendEvent) {
+            s_direct_configure_game = 1;
+            int local_pt[2] = {0, 0};
+            char cmevent_buf[128] = {0};
+            s_pfn_cmevent_ctor(cmevent_buf, 0, local_pt);
+            s_pfn_sendEvent(page, cmevent_buf);
+            if (s_pfn_cmevent_dtor) s_pfn_cmevent_dtor(cmevent_buf);
+            s_direct_configure_game = 0;
+        }
+    }
+    return res;
+}
+
+static void* s_rail_btn_view = NULL;
+static void* s_rail_btn_add_folder = NULL;
+static void* s_btn_all_games = NULL;
+static void* s_btn_add_folder = NULL;
+static void* s_btn_library = NULL;
+static void* s_fritchii_home_widget = NULL;
+
+static void* s_orig_rail_btn_vtable = NULL;
+static void* s_rail_btn_vtable[256];
+
+static const char* const kClassicRailIcon[] = {
+    "16 16 2 1", ". c None", "# c #FFF2E6",
+    "................", "................",
+    "..###.########..", "..###.########..",
+    "................", "................",
+    "..###.########..", "..###.########..",
+    "................", "................",
+    "..###.########..", "..###.########..",
+    "................", "................",
+    "................", "................",
+};
+
+static const char* const kModernRailIcon[] = {
+    "16 16 2 1", ". c None", "# c #FFF2E6",
+    "................", "................",
+    "..#####..#####..", "..#...#..#...#..",
+    "..#...#..#...#..", "..#...#..#...#..",
+    "..#####..#####..", "................",
+    "................", "..#####..#####..",
+    "..#...#..#...#..", "..#...#..#...#..",
+    "..#...#..#...#..", "..#####..#####..",
+    "................", "................",
+};
+
+static const char* const kAddFolderRailIcon[] = {
+    "16 16 2 1", ". c None", "# c #FFF2E6",
+    "................", "................",
+    "................", "..#####.........",
+    "..#...########..", "..#..........#..",
+    "..#....##....#..", "..#....##....#..",
+    "..#..######..#..", "..#..######..#..",
+    "..#....##....#..", "..#....##....#..",
+    "..#..........#..", "..############..",
+    "................", "................",
+};
+
+static void (*s_pfn_pixmap_ctor_xpm)(void*, const char* const*) = NULL;
+
+static void SetRailButtonIcon(void* button, const char* const* xpm) {
+    if (!s_pfn_pixmap_ctor_xpm || !s_pfn_dtor_pixmap || !s_pfn_qicon_ctor_pixmap ||
+        !s_pfn_setIcon || !s_pfn_qicon_dtor) return;
+
+    alignas(void*) char pixmap[64] = {0};
+    alignas(void*) char icon[32] = {0};
+    s_pfn_pixmap_ctor_xpm(pixmap, xpm);
+    s_pfn_qicon_ctor_pixmap(icon, pixmap);
+    s_pfn_setIcon(button, icon);
+    s_pfn_qicon_dtor(icon);
+    s_pfn_dtor_pixmap(pixmap);
+}
+
+static bool RailBtnEventHook(void* this_ptr, void* event_ptr) {
+    if (!this_ptr || !event_ptr) return false;
+    int ev_type = 0;
+    if (s_pfn_event_type) {
+        ev_type = s_pfn_event_type(event_ptr);
+    }
+    pfn_event_orig orig = s_orig_rail_btn_vtable ? (pfn_event_orig)((void**)s_orig_rail_btn_vtable)[4] : NULL;
+    bool res = orig ? orig(this_ptr, event_ptr) : false;
+
+    if (ev_type == 3) { // QEvent::MouseButtonRelease
+        if (this_ptr == s_rail_btn_add_folder) {
+            if (s_btn_add_folder && s_pfn_btn_click) {
+                s_pfn_btn_click(s_btn_add_folder);
+            }
+        } else if (this_ptr == s_rail_btn_view) {
+            int is_modern = 1;
+            if (s_fritchii_home_widget && s_pfn_isVisible) {
+                is_modern = s_pfn_isVisible(s_fritchii_home_widget);
+            }
+            if (is_modern) {
+                if (s_btn_all_games && s_pfn_btn_click) {
+                    s_pfn_btn_click(s_btn_all_games);
+                }
+            } else {
+                if (s_btn_library && s_pfn_btn_click) {
+                    s_pfn_btn_click(s_btn_library);
+                }
+            }
+        }
+    }
+    return res;
+}
 
 static void* s_game_scroll_area = NULL;
 
@@ -750,18 +1455,7 @@ static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
     HelperGetItemRoleText(item, 0, out_buf, buf_size);
 }
 
-static void LogDebugMeta(const char* fmt, ...) {
-    char buf[1024];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-    FILE* f = fopen("D:\\SB\\debug_meta.log", "a");
-    if (f) {
-        fprintf(f, "%s\n", buf);
-        fclose(f);
-    }
-}
+static void LogDebugMeta(const char* fmt, ...) { (void)fmt; }
 
 static void PopulateGameMeta(void* tree_view) {
     if (!tree_view || !s_pfn_view_model || !s_pfn_model_root) return;
@@ -942,6 +1636,18 @@ static void TriggerLiveQtWidgetTranslation(int force) {
 
     if (!s_pfn_allWidgets) {
         s_pfn_allWidgets = (pfn_allWidgets)GetProcAddress(hWidgets, "?allWidgets@QApplication@@SA?AV?$QList@PEAVQWidget@@@@XZ");
+        s_pfn_geometry = (pfn_geometry)GetProcAddress(hWidgets, "?geometry@QWidget@@QEBAAEBVQRect@@XZ");
+        s_pfn_setGeometry = (pfn_setGeometry)GetProcAddress(hWidgets, "?setGeometry@QWidget@@QEAAXHHHH@Z");
+        s_pfn_lower = (pfn_lower)GetProcAddress(hWidgets, "?lower@QWidget@@QEAAXXZ");
+        s_pfn_setScaledContents = (pfn_setScaledContents)GetProcAddress(hWidgets, "?setScaledContents@QLabel@@QEAAX_N@Z");
+        s_pfn_setIcon = (pfn_setIcon)GetProcAddress(hWidgets, "?setIcon@QAbstractButton@@QEAAXAEBVQIcon@@@Z");
+        if (hGui) {
+            s_pfn_pixmap_ctor_file = (pfn_pixmap_ctor_file)GetProcAddress(hGui, "??0QPixmap@@QEAA@AEBVQString@@PEBDV?$QFlags@W4ImageConversionFlag@Qt@@@@@Z");
+            s_pfn_qicon_ctor_file = (pfn_qicon_ctor_file)GetProcAddress(hGui, "??0QIcon@@QEAA@AEBVQString@@@Z");
+            s_pfn_qicon_ctor_pixmap = (pfn_qicon_ctor_pixmap)GetProcAddress(hGui, "??0QIcon@@QEAA@AEBVQPixmap@@@Z");
+            s_pfn_pixmap_ctor_xpm = (decltype(s_pfn_pixmap_ctor_xpm))GetProcAddress(hGui, "??0QPixmap@@QEAA@QEBQEBD@Z");
+            s_pfn_qicon_dtor = (pfn_qicon_dtor)GetProcAddress(hGui, "??1QIcon@@QEAA@XZ");
+        }
         s_pfn_inherits = (pfn_inherits)GetProcAddress(hCore, "?inherits@QObject@@QEBA_NPEBD@Z");
         s_pfn_objectName = (pfn_objectName)GetProcAddress(hCore, "?objectName@QObject@@QEBA?AVQString@@XZ");
         s_pfn_parentWidget = (pfn_parentWidget)GetProcAddress(hWidgets, "?parentWidget@QWidget@@QEBAPEAV1@XZ");
@@ -1022,6 +1728,20 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         s_pfn_show = (pfn_show)GetProcAddress(hWidgets, "?show@QWidget@@QEAAXXZ");
         s_pfn_setObjectName = (pfn_setObjectName)GetProcAddress(hCore, "?setObjectName@QObject@@QEAAXAEBVQString@@@Z");
         s_pfn_children = (pfn_children)GetProcAddress(hCore, "?children@QObject@@QEBAAEBV?$QList@PEAVQObject@@@@XZ");
+        s_pfn_btn_ctor = (pfn_btn_ctor)GetProcAddress(hWidgets, "??0QPushButton@@QEAA@PEAVQWidget@@@Z");
+        s_pfn_toolbtn_ctor = (pfn_toolbtn_ctor)GetProcAddress(hWidgets, "??0QToolButton@@QEAA@PEAVQWidget@@@Z");
+        s_pfn_btn_click = (pfn_btn_click)GetProcAddress(hWidgets, "?click@QAbstractButton@@QEAAXXZ");
+        s_pfn_isVisible = (pfn_is_visible)GetProcAddress(hWidgets, "?isVisible@QWidget@@QEBA_NXZ");
+        s_pfn_setIconSize = (pfn_setIconSize)GetProcAddress(hWidgets, "?setIconSize@QAbstractButton@@QEAAXAEBVQSize@@@Z");
+        if (hGui) {
+            s_pfn_act_trigger = (pfn_act_trigger)GetProcAddress(hGui, "?trigger@QAction@@QEAAXXZ");
+        }
+        if (hGui) {
+            s_pfn_cmevent_ctor = (pfn_cmevent_ctor)GetProcAddress(hGui, "??0QContextMenuEvent@@QEAA@W4Reason@0@AEBVQPoint@@@Z");
+            s_pfn_cmevent_dtor = (pfn_cmevent_dtor)GetProcAddress(hGui, "??1QContextMenuEvent@@UEAA@XZ");
+        }
+        s_pfn_sendEvent = (pfn_send_event)GetProcAddress(hCore, "?sendEvent@QCoreApplication@@SA_NPEAVQObject@@PEAVQEvent@@@Z");
+        s_pfn_event_type = (pfn_event_type)GetProcAddress(hCore, "?type@QEvent@@QEBA?AW4Type@1@XZ");
     }
 
     if (!s_pfn_allWidgets || !s_pfn_inherits || !s_pfn_fromUtf8_str || !s_pfn_toUtf8 || !s_pfn_constData || !s_pfn_dtor) {
@@ -1055,6 +1775,213 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 break;
             }
         }
+
+        // Pass 2: Detect hero title and style hero header & backdrop
+        char cur_hero_title[256] = {0};
+        void* hero_title_widget = NULL;
+        void* fritchii_home_widget = NULL;
+
+        for (int64_t i = 0; i < widget_list.size; i++) {
+            void* w = widget_list.ptr[i];
+            if (!w) continue;
+            char oname[128] = {0};
+            if (s_pfn_objectName) {
+                char qstr_n[32] = {0};
+                s_pfn_objectName(w, qstr_n);
+                char qba_n[32] = {0};
+                s_pfn_toUtf8(qstr_n, qba_n);
+                const char* s = s_pfn_constData(qba_n);
+                if (s) strncpy(oname, s, sizeof(oname) - 1);
+                if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_n);
+                s_pfn_dtor(qstr_n);
+            }
+            if (strcmp(oname, "FritchiiHeroTitle") == 0) {
+                hero_title_widget = w;
+                if (s_pfn_lbl_text) {
+                    char q_ht[32] = {0};
+                    s_pfn_lbl_text(w, q_ht);
+                    char q_ba[32] = {0};
+                    s_pfn_toUtf8(q_ht, q_ba);
+                    const char* t = s_pfn_constData(q_ba);
+                    if (t) strncpy(cur_hero_title, t, sizeof(cur_hero_title) - 1);
+                    if (s_pfn_qba_dtor) s_pfn_qba_dtor(q_ba);
+                    s_pfn_dtor(q_ht);
+                }
+            } else if (strcmp(oname, "FritchiiHome") == 0) {
+                fritchii_home_widget = w;
+            }
+        }
+
+        GameMetaCache* hero_meta = NULL;
+        for (int m = 0; m < s_game_meta_count; m++) {
+            if (cur_hero_title[0] != '\0' &&
+                (strcmp(s_game_meta[m].title, cur_hero_title) == 0 ||
+                 strstr(s_game_meta[m].title, cur_hero_title) != NULL ||
+                 strstr(cur_hero_title, s_game_meta[m].title) != NULL)) {
+                hero_meta = &s_game_meta[m];
+                break;
+            }
+        }
+        const char* hero_pid = (hero_meta && hero_meta->program_id[0]) ? hero_meta->program_id : "";
+
+        if (fritchii_home_widget) {
+            void* page = fritchii_home_widget;
+            void* page_layout = s_pfn_layout ? s_pfn_layout(page) : NULL;
+            if (page_layout) {
+                if (s_pfn_setContentsMargins) s_pfn_setContentsMargins(page_layout, 56, 36, 56, 20);
+                if (s_pfn_setSpacing) s_pfn_setSpacing(page_layout, 72);
+            }
+
+            int page_w = 1280;
+            if (s_pfn_geometry) {
+                const int* r = (const int*)s_pfn_geometry(page);
+                if (r) {
+                    int w_calc = r[2] - r[0] + 1;
+                    if (w_calc > 400 && w_calc < 5000) page_w = w_calc;
+                }
+            }
+
+            int backdrop_x = 32;
+            int backdrop_y = 14;
+            int backdrop_w = page_w - 64;
+            int backdrop_h = 330;
+
+            if (!s_hero_backdrop && s_pfn_lbl_ctor) {
+                s_hero_backdrop = malloc(512);
+                if (s_hero_backdrop) {
+                    memset(s_hero_backdrop, 0, 512);
+                    s_pfn_lbl_ctor(s_hero_backdrop, page, 0);
+                    if (s_pfn_setObjectName) {
+                        char q_on[32] = {0};
+                        s_pfn_fromUtf8_str(q_on, "FritchiiHeroBackdrop", -1);
+                        s_pfn_setObjectName(s_hero_backdrop, q_on);
+                        s_pfn_dtor(q_on);
+                    }
+                    if (s_pfn_setAttribute) s_pfn_setAttribute(s_hero_backdrop, 51, 1);
+                    if (s_pfn_setScaledContents) s_pfn_setScaledContents(s_hero_backdrop, 1);
+                    if (s_pfn_setStyleSheet) {
+                        char q_css[32] = {0};
+                        s_pfn_fromUtf8_str(q_css, "QLabel#FritchiiHeroBackdrop { background: transparent; }", -1);
+                        s_pfn_setStyleSheet(s_hero_backdrop, q_css);
+                        s_pfn_dtor(q_css);
+                    }
+                }
+            }
+
+            if (s_hero_backdrop) {
+                if (s_pfn_setGeometry) s_pfn_setGeometry(s_hero_backdrop, backdrop_x, backdrop_y, backdrop_w, backdrop_h);
+                if (s_pfn_lower) s_pfn_lower(s_hero_backdrop);
+                if (s_pfn_show) s_pfn_show(s_hero_backdrop);
+
+                if (force || lang_changed || mode_changed ||
+                    strcmp(s_last_hero_title, cur_hero_title) != 0 ||
+                    abs(s_last_backdrop_w - backdrop_w) > 4 ||
+                    !s_hero_backdrop_pix_inited) {
+
+                    wchar_t exe_dir[MAX_PATH] = {0};
+                    GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+                    PathRemoveFileSpecW(exe_dir);
+
+                    wchar_t banner_src[MAX_PATH] = {0};
+                    if (hero_pid[0] != '\0') {
+                        swprintf(banner_src, MAX_PATH, L"%s\\covers\\%S_banner.png", exe_dir, hero_pid);
+                        if (GetFileAttributesW(banner_src) == INVALID_FILE_ATTRIBUTES) {
+                            swprintf(banner_src, MAX_PATH, L"%s\\covers\\%S.png", exe_dir, hero_pid);
+                        }
+                    }
+                    if (banner_src[0] == L'\0' || GetFileAttributesW(banner_src) == INVALID_FILE_ATTRIBUTES) {
+                        swprintf(banner_src, MAX_PATH, L"%s\\hero_default.png", exe_dir);
+                    }
+
+                    wchar_t backdrop_out[MAX_PATH];
+                    swprintf(backdrop_out, MAX_PATH, L"%s\\covers\\current_hero_backdrop.png", exe_dir);
+
+                    if (GenerateBlurredHeroBackdrop(banner_src, backdrop_out, backdrop_w, backdrop_h)) {
+                        char utf8_path[MAX_PATH * 2] = {0};
+                        WideCharToMultiByte(CP_UTF8, 0, backdrop_out, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
+
+                        if (s_hero_backdrop_pix_inited && s_pfn_dtor_pixmap) {
+                            s_pfn_dtor_pixmap(s_hero_backdrop_pix);
+                            s_hero_backdrop_pix_inited = 0;
+                        }
+
+                        if (s_pfn_pixmap_ctor_file && s_pfn_setPixmap) {
+                            char q_pstr[32] = {0};
+                            s_pfn_fromUtf8_str(q_pstr, utf8_path, -1);
+                            s_pfn_pixmap_ctor_file(s_hero_backdrop_pix, q_pstr, NULL, 0);
+                            s_pfn_dtor(q_pstr);
+                            s_hero_backdrop_pix_inited = 1;
+                            s_pfn_setPixmap(s_hero_backdrop, s_hero_backdrop_pix);
+                        }
+                    }
+                    strncpy(s_last_hero_title, cur_hero_title, sizeof(s_last_hero_title) - 1);
+                    s_last_backdrop_w = backdrop_w;
+                }
+            }
+
+            const Qt6List* page_children = s_pfn_children ? s_pfn_children(page) : NULL;
+            if (page_children && page_children->ptr && page_children->size > 0) {
+                for (int64_t c = 0; c < page_children->size; c++) {
+                    void* child = page_children->ptr[c];
+                    if (!child) continue;
+                    if (s_pfn_inherits(child, "QLabel")) {
+                        char cname[128] = {0};
+                        if (s_pfn_objectName) {
+                            char qstr_n[32] = {0};
+                            s_pfn_objectName(child, qstr_n);
+                            char qba_n[32] = {0};
+                            s_pfn_toUtf8(qstr_n, qba_n);
+                            const char* s = s_pfn_constData(qba_n);
+                            if (s) strncpy(cname, s, sizeof(cname) - 1);
+                            if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_n);
+                            s_pfn_dtor(qstr_n);
+                        }
+                        if (strcmp(cname, "FritchiiHeroTitle") != 0 && strcmp(cname, "FritchiiHeroBackdrop") != 0) {
+                            if (cname[0] == '\0' && s_pfn_setObjectName) {
+                                char q_on[32] = {0};
+                                s_pfn_fromUtf8_str(q_on, "FritchiiHeroCover", -1);
+                                s_pfn_setObjectName(child, q_on);
+                                s_pfn_dtor(q_on);
+                            }
+                            if (s_pfn_setFixedWidth) s_pfn_setFixedWidth(child, 200);
+                            if (s_pfn_setFixedHeight) s_pfn_setFixedHeight(child, 200);
+                            if (s_pfn_setScaledContents) s_pfn_setScaledContents(child, 1);
+                            if (s_pfn_setStyleSheet) {
+                                char q_css[32] = {0};
+                                s_pfn_fromUtf8_str(q_css, "QLabel { background: transparent; }", -1);
+                                s_pfn_setStyleSheet(child, q_css);
+                                s_pfn_dtor(q_css);
+                            }
+
+                            if (hero_pid[0] != '\0') {
+                                wchar_t exe_dir[MAX_PATH] = {0};
+                                GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+                                PathRemoveFileSpecW(exe_dir);
+                                wchar_t cov_src[MAX_PATH] = {0};
+                                swprintf(cov_src, MAX_PATH, L"%s\\covers\\%S_rounded.png", exe_dir, hero_pid);
+                                if (GetFileAttributesW(cov_src) == INVALID_FILE_ATTRIBUTES) {
+                                    swprintf(cov_src, MAX_PATH, L"%s\\covers\\%S.png", exe_dir, hero_pid);
+                                }
+                                if (GetFileAttributesW(cov_src) != INVALID_FILE_ATTRIBUTES) {
+                                    char utf8_cov[MAX_PATH * 2] = {0};
+                                    WideCharToMultiByte(CP_UTF8, 0, cov_src, -1, utf8_cov, sizeof(utf8_cov), NULL, NULL);
+                                    if (s_pfn_pixmap_ctor_file && s_pfn_setPixmap && s_pfn_dtor_pixmap) {
+                                        char pix_tmp[64] = {0};
+                                        char q_pstr[32] = {0};
+                                        s_pfn_fromUtf8_str(q_pstr, utf8_cov, -1);
+                                        s_pfn_pixmap_ctor_file(pix_tmp, q_pstr, NULL, 0);
+                                        s_pfn_dtor(q_pstr);
+                                        s_pfn_setPixmap(child, pix_tmp);
+                                        s_pfn_dtor_pixmap(pix_tmp);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         for (int64_t i = 0; i < widget_list.size; i++) {
             void* w = widget_list.ptr[i];
             if (!w) continue;
@@ -1070,6 +1997,294 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 if (oname) strncpy(obj_name_buf, oname, sizeof(obj_name_buf) - 1);
                 if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_n);
                 s_pfn_dtor(qstr_n);
+            }
+
+                        // Status bar buttons styled to active theme
+            if (strcmp(obj_name_buf, "OotFpsStatusBarButton") == 0 ||
+                strcmp(obj_name_buf, "TogglableStatusBarButton") == 0 ||
+                strcmp(obj_name_buf, "RendererStatusBarButton") == 0 ||
+                strcmp(obj_name_buf, "GPUStatusBarButton") == 0 ||
+                strcmp(obj_name_buf, "DockingStatusBarButton") == 0) {
+                if (s_pfn_setStyleSheet) {
+                    char sb_css[256];
+                    snprintf(sb_css, sizeof(sb_css),
+                        "QPushButton { background: transparent; border: none; color: %s; padding: 3px 10px; border-radius: 6px; font-weight: 600; } "
+                        "QPushButton:hover { background: #1f1f24; color: #ececf1; }",
+                        g_palettes[g_theme_idx].accent);
+                    char q_css[32] = {0};
+                    s_pfn_fromUtf8_str(q_css, sb_css, -1);
+                    s_pfn_setStyleSheet(w, q_css);
+                    s_pfn_dtor(q_css);
+                }
+            }
+
+            // Play button with active theme accent & Settings button
+            if (strcmp(obj_name_buf, "FritchiiPlay") == 0) {
+                if (s_pfn_setStyleSheet) {
+                    char play_css[512];
+                    snprintf(play_css, sizeof(play_css),
+                        "QPushButton#FritchiiPlay { background-color: %s; color: %s; border: none; border-radius: 8px; min-height: 44px; max-height: 44px; padding: 0 32px; font-size: 15px; font-weight: 700; } "
+                        "QPushButton#FritchiiPlay:hover { background-color: %s; } "
+                        "QPushButton#FritchiiPlay:pressed { background-color: %s; }",
+                        g_palettes[g_theme_idx].accent,
+                        g_palettes[g_theme_idx].text_on_accent,
+                        g_palettes[g_theme_idx].accent_light,
+                        g_palettes[g_theme_idx].accent_dark);
+                    char q_css[32] = {0};
+                    s_pfn_fromUtf8_str(q_css, play_css, -1);
+                    s_pfn_setStyleSheet(w, q_css);
+                    s_pfn_dtor(q_css);
+                }
+
+                void* play_parent = s_pfn_parentWidget ? s_pfn_parentWidget(w) : NULL;
+                if (play_parent && s_pfn_btn_ctor) {
+                    if (!s_btn_configure) {
+                        s_btn_configure = malloc(512);
+                        if (s_btn_configure) {
+                            memset(s_btn_configure, 0, 512);
+                            s_pfn_btn_ctor(s_btn_configure, play_parent);
+                            if (s_pfn_setObjectName) {
+                                char q_on[32] = {0};
+                                s_pfn_fromUtf8_str(q_on, "YngchiiGameConfigure", -1);
+                                s_pfn_setObjectName(s_btn_configure, q_on);
+                                s_pfn_dtor(q_on);
+                            }
+                            void** vt = *(void***)s_btn_configure;
+                            if (vt) {
+                                s_orig_btn_vtable = vt;
+                                memcpy(s_cfg_btn_vtable, vt, sizeof(s_cfg_btn_vtable));
+                                s_cfg_btn_vtable[4] = (void*)ConfigureBtnEventHook;
+                                *(void***)s_btn_configure = s_cfg_btn_vtable;
+                            }
+                        }
+                    }
+
+                    if (s_btn_configure) {
+                        int is_vn = g_lang_vn;
+                        const char* btn_text = is_vn ? "⚙ Cài đặt" : "⚙ Settings";
+                        if (s_pfn_btn_setText) {
+                            char q_txt[32] = {0};
+                            s_pfn_fromUtf8_str(q_txt, btn_text, -1);
+                            s_pfn_btn_setText(s_btn_configure, q_txt);
+                            s_pfn_dtor(q_txt);
+                        }
+
+                        if (s_pfn_setStyleSheet) {
+                            char cfg_css[512];
+                            snprintf(cfg_css, sizeof(cfg_css),
+                                "QPushButton#YngchiiGameConfigure { "
+                                "  background-color: #343837; "
+                                "  color: #efead7; "
+                                "  border: 1.5px solid #87867c; "
+                                "  border-radius: 8px; "
+                                "  min-height: 44px; max-height: 44px; "
+                                "  padding: 0 20px; "
+                                "  font-size: 15px; font-weight: 600; "
+                                "} "
+                                "QPushButton#YngchiiGameConfigure:hover { "
+                                "  background-color: #424746; "
+                                "  border-color: %s; "
+                                "  color: #ffffff; "
+                                "} "
+                                "QPushButton#YngchiiGameConfigure:pressed { "
+                                "  background-color: #282b2a; "
+                                "}",
+                                g_palettes[g_theme_idx].accent);
+                            char q_css[32] = {0};
+                            s_pfn_fromUtf8_str(q_css, cfg_css, -1);
+                            s_pfn_setStyleSheet(s_btn_configure, q_css);
+                            s_pfn_dtor(q_css);
+                        }
+
+                        if (s_pfn_geometry && s_pfn_setGeometry) {
+                            const int* r = (const int*)s_pfn_geometry(w);
+                            if (r) {
+                                int play_x = r[0];
+                                int play_y = r[1];
+                                int play_w = r[2] - r[0] + 1;
+                                int play_h = r[3] - r[1] + 1;
+                                if (play_w > 0 && play_h > 0) {
+                                    s_pfn_setGeometry(s_btn_configure, play_x + play_w + 14, play_y, 140, play_h);
+                                    if (s_pfn_show) s_pfn_show(s_btn_configure);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Rail buttons with active theme accent
+            if (strcmp(obj_name_buf, "FritchiiRailButton") == 0) {
+                if (s_pfn_setStyleSheet) {
+                    char rail_css[768];
+                    const ThemePalette* palette = &g_palettes[g_theme_idx];
+                    snprintf(rail_css, sizeof(rail_css),
+                        "QToolButton#FritchiiRailButton { color: #fff2e6; background: #272225; border: 1px solid #564346; border-radius: 10px; padding: 8px; } "
+                        "QToolButton#FritchiiRailButton:checked { background: #343837; border-color: %s; } "
+                        "QToolButton#FritchiiRailButton:hover { background: #402a25; border-color: %s; } "
+                        "QToolButton#FritchiiRailButton:pressed { background: #572e26; border-color: %s; }",
+                        palette->accent, palette->accent_light, palette->accent_dark);
+                    char q_css[32] = {0};
+                    s_pfn_fromUtf8_str(q_css, rail_css, -1);
+                    s_pfn_setStyleSheet(w, q_css);
+                    s_pfn_dtor(q_css);
+                }
+
+                char rail_tip[128] = {0};
+                if (s_pfn_toolTip) {
+                    char q_tip[32] = {0};
+                    s_pfn_toolTip(w, q_tip);
+                    char q_ba[32] = {0};
+                    s_pfn_toUtf8(q_tip, q_ba);
+                    const char* ft = s_pfn_constData(q_ba);
+                    if (ft && ft[0] != '\0') strncpy(rail_tip, ft, sizeof(rail_tip) - 1);
+                    if (s_pfn_qba_dtor) s_pfn_qba_dtor(q_ba);
+                    s_pfn_dtor(q_tip);
+                }
+
+                if (rail_tip[0] != '\0' && (strcmp(rail_tip, "Library") == 0 || strcmp(rail_tip, "Kho game") == 0 || strstr(rail_tip, "Library") || strstr(rail_tip, "Kho game") || strstr(rail_tip, "ThÆ° viá»‡n") || strstr(rail_tip, "Thư viện"))) {
+                    s_btn_library = w;
+                }
+
+                // Add View Mode Switch & Add Folder buttons to Rail once
+                void* rail_w = s_pfn_parentWidget ? s_pfn_parentWidget(w) : NULL;
+                void* rail_layout = (rail_w && s_pfn_layout) ? s_pfn_layout(rail_w) : NULL;
+                if (rail_layout && s_pfn_toolbtn_ctor && s_pfn_insertWidget) {
+                    if (!s_rail_btn_view) {
+                        s_rail_btn_view = malloc(512);
+                        if (s_rail_btn_view) {
+                            memset(s_rail_btn_view, 0, 512);
+                            s_pfn_toolbtn_ctor(s_rail_btn_view, rail_w);
+                            if (s_pfn_setObjectName) {
+                                char q_on[32] = {0};
+                                s_pfn_fromUtf8_str(q_on, "FritchiiRailButton", -1);
+                                s_pfn_setObjectName(s_rail_btn_view, q_on);
+                                s_pfn_dtor(q_on);
+                            }
+                            if (s_pfn_setIconSize) {
+                                int qs[2] = {22, 22};
+                                s_pfn_setIconSize(s_rail_btn_view, qs);
+                            }
+                            void** vt = *(void***)s_rail_btn_view;
+                            if (vt) {
+                                if (!s_orig_rail_btn_vtable) {
+                                    s_orig_rail_btn_vtable = vt;
+                                    memcpy(s_rail_btn_vtable, vt, sizeof(s_rail_btn_vtable));
+                                    s_rail_btn_vtable[4] = (void*)RailBtnEventHook;
+                                }
+                                *(void***)s_rail_btn_view = s_rail_btn_vtable;
+                            }
+                            s_pfn_insertWidget(rail_layout, 1, s_rail_btn_view, 0, 0);
+                        }
+                    }
+
+                    if (!s_rail_btn_add_folder) {
+                        s_rail_btn_add_folder = malloc(512);
+                        if (s_rail_btn_add_folder) {
+                            memset(s_rail_btn_add_folder, 0, 512);
+                            s_pfn_toolbtn_ctor(s_rail_btn_add_folder, rail_w);
+                            if (s_pfn_setObjectName) {
+                                char q_on[32] = {0};
+                                s_pfn_fromUtf8_str(q_on, "FritchiiRailButton", -1);
+                                s_pfn_setObjectName(s_rail_btn_add_folder, q_on);
+                                s_pfn_dtor(q_on);
+                            }
+                            if (s_pfn_setIconSize) {
+                                int qs[2] = {22, 22};
+                                s_pfn_setIconSize(s_rail_btn_add_folder, qs);
+                            }
+                            void** vt = *(void***)s_rail_btn_add_folder;
+                            if (vt) {
+                                if (!s_orig_rail_btn_vtable) {
+                                    s_orig_rail_btn_vtable = vt;
+                                    memcpy(s_rail_btn_vtable, vt, sizeof(s_rail_btn_vtable));
+                                    s_rail_btn_vtable[4] = (void*)RailBtnEventHook;
+                                }
+                                *(void***)s_rail_btn_add_folder = s_rail_btn_vtable;
+                            }
+                            SetRailButtonIcon(s_rail_btn_add_folder, kAddFolderRailIcon);
+                            s_pfn_insertWidget(rail_layout, 2, s_rail_btn_add_folder, 0, 0);
+                        }
+                    }
+                }
+
+                // Update View button tooltip & icon based on current view
+                if (s_rail_btn_view) {
+                    int is_vn = g_lang_vn;
+                    int is_modern = (s_fritchii_home_widget && s_pfn_isVisible) ? s_pfn_isVisible(s_fritchii_home_widget) : 1;
+                    const char* view_tip = is_modern ?
+                        (is_vn ? "Chuyển giao diện Danh sách cổ điển" : "Switch to Classic Table View") :
+                        (is_vn ? "Chuyển giao diện Thẻ hiện đại" : "Switch to Modern Cards View");
+
+                    if (s_pfn_toolTip && s_pfn_fromUtf8_str && s_pfn_dtor) {
+                        char q_tip[64] = {0};
+                        s_pfn_fromUtf8_str(q_tip, view_tip, -1);
+                        // Using setToolTip on widget:
+                        typedef void (*pfn_setToolTip)(void*, void*);
+                        HMODULE hWidgets = GetModuleHandleW(L"Qt6Widgets.dll");
+                        pfn_setToolTip pSetTip = hWidgets ? (pfn_setToolTip)GetProcAddress(hWidgets, "?setToolTip@QWidget@@QEAAXAEBVQString@@@Z") : NULL;
+                        if (pSetTip) pSetTip(s_rail_btn_view, q_tip);
+                        s_pfn_dtor(q_tip);
+                    }
+                    static int last_view_icon = -1;
+                    if (last_view_icon != is_modern) {
+                        SetRailButtonIcon(s_rail_btn_view, is_modern ? kClassicRailIcon : kModernRailIcon);
+                        last_view_icon = is_modern;
+                    }
+                    if (s_pfn_show) s_pfn_show(s_rail_btn_view);
+                }
+
+                // Update Add Folder button tooltip & icon
+                if (s_rail_btn_add_folder) {
+                    int is_vn = g_lang_vn;
+                    const char* add_tip = is_vn ? "Thêm thư mục game" : "Add Game Directory";
+                    if (s_pfn_toolTip && s_pfn_fromUtf8_str && s_pfn_dtor) {
+                        char q_tip[64] = {0};
+                        s_pfn_fromUtf8_str(q_tip, add_tip, -1);
+                        typedef void (*pfn_setToolTip)(void*, void*);
+                        HMODULE hWidgets = GetModuleHandleW(L"Qt6Widgets.dll");
+                        pfn_setToolTip pSetTip = hWidgets ? (pfn_setToolTip)GetProcAddress(hWidgets, "?setToolTip@QWidget@@QEAAXAEBVQString@@@Z") : NULL;
+                        if (pSetTip) pSetTip(s_rail_btn_add_folder, q_tip);
+                        s_pfn_dtor(q_tip);
+                    }
+                    if (s_pfn_show) s_pfn_show(s_rail_btn_add_folder);
+                }
+
+                if (rail_tip[0] != '\0' && (strcmp(rail_tip, "Library") == 0 || strcmp(rail_tip, "Kho game") == 0)) {
+                    wchar_t exe_dir[MAX_PATH] = {0};
+                    GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+                    PathRemoveFileSpecW(exe_dir);
+                    wchar_t lib_icon_path[MAX_PATH];
+                    swprintf(lib_icon_path, MAX_PATH, L"%s\\covers\\rail_library_%d.png", exe_dir, g_theme_idx);
+                    if (GetFileAttributesW(lib_icon_path) != INVALID_FILE_ATTRIBUTES) {
+                        char utf8_lib[MAX_PATH * 2] = {0};
+                        WideCharToMultiByte(CP_UTF8, 0, lib_icon_path, -1, utf8_lib, sizeof(utf8_lib), NULL, NULL);
+                        if (s_pfn_qicon_ctor_file && s_pfn_setIcon && s_pfn_qicon_dtor) {
+                            char q_lib[32] = {0};
+                            s_pfn_fromUtf8_str(q_lib, utf8_lib, -1);
+                            char q_ic[32] = {0};
+                            s_pfn_qicon_ctor_file(q_ic, q_lib);
+                            s_pfn_setIcon(w, q_ic);
+                            s_pfn_qicon_dtor(q_ic);
+                            s_pfn_dtor(q_lib);
+                        }
+                    }
+                }
+            }
+
+            // Hero Title styling
+            if (strcmp(obj_name_buf, "FritchiiHome") == 0) {
+                s_fritchii_home_widget = w;
+            }
+
+            if (strcmp(obj_name_buf, "FritchiiHeroTitle") == 0) {
+                if (s_pfn_setStyleSheet) {
+                    const char* title_css = "QLabel#FritchiiHeroTitle { font-size: 26px; font-weight: 700; color: #ffffff; background: transparent; }";
+                    char q_css[32] = {0};
+                    s_pfn_fromUtf8_str(q_css, title_css, -1);
+                    s_pfn_setStyleSheet(w, q_css);
+                    s_pfn_dtor(q_css);
+                }
             }
 
             // Modern Home List View on FritchiiTile
@@ -1122,9 +2337,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                             } else if (s_pfn_addWidget) {
                                 s_pfn_addWidget(page_layout, scroll, 100, 0);
                             }
-                            if (page_layout && s_pfn_setContentsMargins) {
-                                s_pfn_setContentsMargins(page_layout, 48, 20, 48, 12);
-                            }
+// Margins managed by Pass 2
 
                             if (s_pfn_show) {
                                 s_pfn_show(parent);
@@ -1137,7 +2350,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                                     int screen_w = GetSystemMetrics(SM_CXSCREEN);
                                     int screen_h = GetSystemMetrics(SM_CYSCREEN);
                                     int win_w = 1280;
-                                    int win_h = 800;
+                                    int win_h = (screen_h >= 960) ? 920 : 850;
                                     int win_x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
                                     int win_y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
                                     SetWindowPos(s_hwndMain, NULL, win_x, win_y, win_w, win_h, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1189,10 +2402,13 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 int is_non_game = 0;
                 if (full_title_buf[0] != '\0') {
                     if (strcmp(full_title_buf, "All games") == 0 || strcmp(full_title_buf, "Kho game") == 0 ||
-                        strcmp(full_title_buf, "Add folder") == 0 || strcmp(full_title_buf, "Thêm game") == 0 ||
-                        strstr(full_title_buf, "All games") != NULL || strstr(full_title_buf, "Kho game") != NULL ||
-                        strstr(full_title_buf, "Add folder") != NULL || strstr(full_title_buf, "Thêm game") != NULL) {
+                        strstr(full_title_buf, "All games") != NULL || strstr(full_title_buf, "Kho game") != NULL || strstr(full_title_buf, "Tất cả") != NULL) {
                         is_non_game = 1;
+                        s_btn_all_games = w;
+                    } else if (strcmp(full_title_buf, "Add folder") == 0 || strcmp(full_title_buf, "Thêm game") == 0 ||
+                               strstr(full_title_buf, "Add folder") != NULL || strstr(full_title_buf, "Thêm game") != NULL || strstr(full_title_buf, "Thêm thư mục") != NULL) {
+                        is_non_game = 1;
+                        s_btn_add_folder = w;
                     }
                 }
 
@@ -1393,11 +2609,6 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         "<div style=\"font-size: 14px; font-weight: 700; color: #ffffff;\">%s</div>"
                         "<div style=\"font-size: 12px; color: #d1d5db; margin-top: 2px;\">%s</div>"
                         "<div style=\"font-size: 11px; color: #9ca3af; margin-top: 1px;\">%s</div>"
-                        "<div style=\"margin-top: 4px;\">"
-                        "<span style=\"background-color: #1f4e3d; color: #4ade80; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;\">Playable</span>"
-                        "&nbsp;&nbsp;"
-                        "<span style=\"background-color: #3b2764; color: #c4b5fd; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;\">X3D Optimized</span>"
-                        "</div>"
                         "</div>",
                         full_title_buf, c_dev, c_ver);
 
@@ -1444,14 +2655,57 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         if (lbl_stats) s_pfn_show(lbl_stats);
                     }
 
+                    int is_hero_card = (cur_hero_title[0] != '\0' &&
+                        (strcmp(full_title_buf, cur_hero_title) == 0 ||
+                         strstr(full_title_buf, cur_hero_title) != NULL ||
+                         strstr(cur_hero_title, full_title_buf) != NULL));
+
                     if (s_pfn_setStyleSheet) {
-                        const char* card_css = 
-                            "QToolButton#FritchiiTile { background: #1e1e24; border: 1px solid #2e2e38; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
-                            "QToolButton#FritchiiTile:hover { background: #262630; border-color: #8b5cf6; }";
+                        char card_css[512];
+                        if (is_hero_card) {
+                            snprintf(card_css, sizeof(card_css),
+                                "QToolButton#FritchiiTile { background: #22222b; border: 1.5px solid %s; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
+                                "QToolButton#FritchiiTile:hover { background: #282833; border-color: %s; }",
+                                g_palettes[g_theme_idx].accent,
+                                g_palettes[g_theme_idx].accent_light);
+                        } else {
+                            snprintf(card_css, sizeof(card_css),
+                                "QToolButton#FritchiiTile { background: #1e1e24; border: 1px solid #2e2e38; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
+                                "QToolButton#FritchiiTile:hover { background: #262630; border-color: %s; }",
+                                g_palettes[g_theme_idx].accent);
+                        }
                         char q_css[32] = {0};
                         s_pfn_fromUtf8_str(q_css, card_css, -1);
                         s_pfn_setStyleSheet(w, q_css);
                         s_pfn_dtor(q_css);
+                    }
+
+                    // Set custom tile cover if in covers/<c_pid>.png
+                    if (c_pid[0] != '\0') {
+                        wchar_t exe_dir[MAX_PATH] = {0};
+                        GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+                        PathRemoveFileSpecW(exe_dir);
+                        wchar_t cov_tile[MAX_PATH] = {0};
+                        swprintf(cov_tile, MAX_PATH, L"%s\\covers\\%S_rounded.png", exe_dir, c_pid);
+                        if (GetFileAttributesW(cov_tile) == INVALID_FILE_ATTRIBUTES) {
+                            swprintf(cov_tile, MAX_PATH, L"%s\\covers\\%S.png", exe_dir, c_pid);
+                        }
+                        if (GetFileAttributesW(cov_tile) != INVALID_FILE_ATTRIBUTES) {
+                            char utf8_cov[MAX_PATH * 2] = {0};
+                            WideCharToMultiByte(CP_UTF8, 0, cov_tile, -1, utf8_cov, sizeof(utf8_cov), NULL, NULL);
+                            if (s_pfn_pixmap_ctor_file && s_pfn_qicon_ctor_pixmap && s_pfn_setIcon && s_pfn_qicon_dtor && s_pfn_dtor_pixmap) {
+                                char q_cov[32] = {0};
+                                s_pfn_fromUtf8_str(q_cov, utf8_cov, -1);
+                                char pix_tmp[64] = {0};
+                                s_pfn_pixmap_ctor_file(pix_tmp, q_cov, NULL, 0);
+                                s_pfn_dtor(q_cov);
+                                char q_ic[32] = {0};
+                                s_pfn_qicon_ctor_pixmap(q_ic, pix_tmp);
+                                s_pfn_setIcon(w, q_ic);
+                                s_pfn_qicon_dtor(q_ic);
+                                s_pfn_dtor_pixmap(pix_tmp);
+                            }
+                        }
                     }
                 } else {
                     // Grid View mode: restore default styling
@@ -1486,22 +2740,42 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 continue;
             }
 
-            // Pochita Dialog Logo Replacement (always check on every timer tick)
+            // Chainsaw Man Dialog Logo Replacement (always check on every timer tick)
             if (strcmp(obj_name_buf, "labelLogo") == 0) {
-                if (!g_hChainsaw) {
-                    HMODULE hExe = GetModuleHandleW(NULL);
-                    g_hChainsaw = (HICON)LoadImageW(hExe, L"IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
-                    if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(568), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
-                    if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+                static int s_chainsaw_dlg_inited = 0;
+                static char s_chainsaw_dlg_pix[64] = {0};
+                if (!s_chainsaw_dlg_inited && s_pfn_pixmap_ctor_file) {
+                    wchar_t exe_dir[MAX_PATH] = {0};
+                    GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+                    PathRemoveFileSpecW(exe_dir);
+                    wchar_t logo_path[MAX_PATH];
+                    swprintf(logo_path, MAX_PATH, L"%s\\covers\\chainsaw_badge.png", exe_dir);
+                    if (GetFileAttributesW(logo_path) != INVALID_FILE_ATTRIBUTES) {
+                        char utf8_path[MAX_PATH * 2] = {0};
+                        WideCharToMultiByte(CP_UTF8, 0, logo_path, -1, utf8_path, sizeof(utf8_path), NULL, NULL);
+                        char q_pstr[32] = {0};
+                        s_pfn_fromUtf8_str(q_pstr, utf8_path, -1);
+                        s_pfn_pixmap_ctor_file(s_chainsaw_dlg_pix, q_pstr, NULL, 0);
+                        s_pfn_dtor(q_pstr);
+                        s_chainsaw_dlg_inited = 1;
+                    }
                 }
-                static int s_pochita_pix_inited = 0;
-                static char s_pochita_pix[64] = {0};
-                if (!s_pochita_pix_inited && g_hChainsaw && s_pfn_pixmapFromWinHICON) {
-                    s_pfn_pixmapFromWinHICON(s_pochita_pix, g_hChainsaw);
-                    s_pochita_pix_inited = 1;
-                }
-                if (s_pochita_pix_inited && s_pfn_setPixmap) {
-                    s_pfn_setPixmap(w, s_pochita_pix);
+                if (s_chainsaw_dlg_inited && s_pfn_setPixmap) {
+                    s_pfn_setPixmap(w, s_chainsaw_dlg_pix);
+                } else {
+                    if (!g_hChainsaw) {
+                        HMODULE hExe = GetModuleHandleW(NULL);
+                        g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+                    }
+                    static int s_pochita_pix_inited = 0;
+                    static char s_pochita_pix[64] = {0};
+                    if (!s_pochita_pix_inited && g_hChainsaw && s_pfn_pixmapFromWinHICON) {
+                        s_pfn_pixmapFromWinHICON(s_pochita_pix, g_hChainsaw);
+                        s_pochita_pix_inited = 1;
+                    }
+                    if (s_pochita_pix_inited && s_pfn_setPixmap) {
+                        s_pfn_setPixmap(w, s_pochita_pix);
+                    }
                 }
                 continue;
             }
@@ -1683,8 +2957,8 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
             // Track
             int is_vn_visual = (s_knob_pos >= 0.5f) ? 1 : 0;
-            COLORREF trackBg = is_vn_visual ? RGB(31, 24, 54) : RGB(24, 24, 28);
-            COLORREF trackBorder = is_vn_visual ? RGB(109, 82, 205) : RGB(56, 56, 64);
+            COLORREF trackBg = is_vn_visual ? g_palettes[g_theme_idx].ref_dark : RGB(24, 24, 28);
+            COLORREF trackBorder = is_vn_visual ? g_palettes[g_theme_idx].ref_accent : RGB(56, 56, 64);
 
             HBRUSH trackBrush = CreateSolidBrush(trackBg);
             HPEN trackPen = CreatePen(PS_SOLID, 1, trackBorder);
@@ -1726,8 +3000,8 @@ static LRESULT CALLBACK LangBtnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             int travel = (h - pad * 2) - knobH;
             int knobY = pad + (int)(s_knob_pos * (float)travel + 0.5f);
 
-            COLORREF knobBg = is_vn_visual ? RGB(139, 92, 246) : RGB(63, 63, 72);
-            COLORREF knobBorder = is_vn_visual ? RGB(196, 181, 253) : RGB(113, 113, 126);
+            COLORREF knobBg = is_vn_visual ? g_palettes[g_theme_idx].ref_accent : RGB(63, 63, 72);
+            COLORREF knobBorder = is_vn_visual ? g_palettes[g_theme_idx].ref_light : RGB(113, 113, 126);
 
             HBRUSH knobBrush = CreateSolidBrush(knobBg);
             HPEN knobPen = CreatePen(PS_SOLID, 1, knobBorder);
@@ -1860,12 +3134,12 @@ static void GetToggleSwitchGeometry(HWND hMainWnd, int* out_x, int* out_y, int* 
     UINT dpi = pGetDpi ? pGetDpi(hMainWnd) : 96;
     if (!dpi) dpi = 96;
 
-    // Horizontally center with sidebar buttons at X = 28 (x = 15, w = 26 at 96 DPI)
-    int centerX = (28 * (int)dpi) / 96;
-    int bw = (26 * (int)dpi) / 96;
-    int bh = (52 * (int)dpi) / 96;
-    int bx = centerX - (bw / 2);
-    int by = (200 * (int)dpi) / 96;
+    // Mathematically center inside 64px rail column across any DPI
+    int rail_w = (64 * (int)dpi) / 96;
+    int bw = (28 * (int)dpi) / 96;
+    int bh = (54 * (int)dpi) / 96;
+    int bx = (rail_w - bw) / 2;
+    int by = (270 * (int)dpi) / 96;
 
     *out_x = bx;
     *out_y = by;
@@ -1902,7 +3176,7 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             int screen_w = GetSystemMetrics(SM_CXSCREEN);
             int screen_h = GetSystemMetrics(SM_CYSCREEN);
             int win_w = 1280;
-            int win_h = 800;
+            int win_h = (screen_h >= 960) ? 920 : 850;
             int win_x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
             int win_y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
             SetWindowPos(hWnd, NULL, win_x, win_y, win_w, win_h, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -2011,6 +3285,16 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             }
             return 0;
         }
+        if (wParam == VK_F10 || (wParam == 'T' && (GetKeyState(VK_CONTROL) & 0x8000))) {
+            g_theme_idx = (g_theme_idx + 1) % 4;
+            SaveThemePreference(g_theme_idx);
+            UpdateInternalFritchiiAccent(g_theme_idx);
+            if (s_hwndLangBtn && IsWindow(s_hwndLangBtn)) {
+                InvalidateRect(s_hwndLangBtn, NULL, FALSE);
+            }
+            TriggerLiveQtWidgetTranslation(1);
+            return 0;
+        }
     }
 
     return CallWindowProcW(s_origMainWndProc, hWnd, uMsg, wParam, lParam);
@@ -2079,12 +3363,11 @@ static void InitializeStep7KernelTimerAndQoS(ULONG* pActualRes) {
 
 static void LogActiveStepSwitches(const char* step_tag, ULONG actual_res) {
     char appdata[MAX_PATH] = {0};
+    DWORD appdata_len = GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH);
+    if (!appdata_len || appdata_len >= MAX_PATH) return;
     char log_path[MAX_PATH] = {0};
-    if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
-        snprintf(log_path, sizeof(log_path), "%s\\eden\\log\\yngchii_step_audit.log", appdata);
-    } else {
-        snprintf(log_path, sizeof(log_path), "%s", "C:\\Users\\Vinha\\AppData\\Roaming\\eden\\log\\yngchii_step_audit.log");
-    }
+    int path_len = snprintf(log_path, sizeof(log_path), "%s\\eden\\log\\yngchii_step_audit.log", appdata);
+    if (path_len < 0 || path_len >= MAX_PATH) return;
 
     FILE* fp = fopen(log_path, "a");
     if (!fp) return;
@@ -2421,11 +3704,11 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                             }
                             // Extract game title from suffix
                             // e.g. suffix = " | Clang ... | The Legend of Zelda: Ocarina of Time (64-bit) | Nvidia"
-                            wchar_t* p_pipe3 = wcsstr(suffix, L" | ");
+                            const wchar_t* p_pipe3 = wcsstr(suffix, L" | ");
                             if (p_pipe3) {
-                                wchar_t* p_pipe4 = wcsstr(p_pipe3 + 3, L" | ");
+                                const wchar_t* p_pipe4 = wcsstr(p_pipe3 + 3, L" | ");
                                 if (p_pipe4) {
-                                    wchar_t* p_pipe5 = wcsstr(p_pipe4 + 3, L" | ");
+                                    const wchar_t* p_pipe5 = wcsstr(p_pipe4 + 3, L" | ");
                                     if (p_pipe5) {
                                         int name_len = (int)(p_pipe5 - (p_pipe4 + 3));
                                         if (name_len > 0 && name_len < 250) {
@@ -2519,100 +3802,123 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
 // ==============================================================================
 // 9. DLL ENTRY POINT
 // ==============================================================================
+static void InitializeProxy(void) {
+    DetectSupportedRyzenCpu();
+    g_lang_vn = LoadLanguagePreference();
+    g_theme_idx = LoadThemePreference();
+    UpdateInternalFritchiiAccent(g_theme_idx);
+    InstallQt6IATHooks();
+
+    // Environment variables for In-App Updater & What's New
+    SetEnvPair("EDEN_UPDATE_URL", "https://api.github.com/repos/yngvifreyr1810/Yngchii-X3D/releases?per_page=100");
+
+    char exe_path[MAX_PATH] = {0};
+    if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
+        char* last_slash = strrchr(exe_path, '\\');
+        if (last_slash) {
+            *last_slash = '\0';
+            char notes_path[MAX_PATH];
+            snprintf(notes_path, MAX_PATH, "%s\\whats-new.md", exe_path);
+            SetEnvPair("FRITCHII_NOTES_PREVIEW", notes_path);
+        }
+    }
+
+    // Apply optimized preset on first launch
+    ApplyOptimizedPresetIfNeeded();
+
+    ULONG actual_res = 0;
+    if (g_is_supported_ryzen) {
+        SetEnvPair("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
+        SetEnvPair("NV_ALLOW_ANSEL", "0");
+        SetEnvPair("ANSEL_SDK_DISABLE", "1");
+
+        SetEnvPair("EDEN_NX2_IDLE_PAUSE", "1");
+        SetEnvPair("EDEN_NX2_CORE_LOCK", "1");
+        SetEnvPair("EDEN_NX2_IDLE_SPIN_US", "20");
+        SetEnvPair("EDEN_NX2_PIN_THREADS", "1");
+        SetEnvPair("EDEN_NX2_GUEST_PIN_EACH", "1");
+
+        SetEnvPair("EDEN_NX2_OOT_POLL_BACKOFF", "1");
+        SetEnvPair("EDEN_NX2_EXP25", "1");
+        SetEnvPair("EDEN_NX2_EXP24", "0");
+
+        SetEnvPair("EDEN_NX2_EXP12", "1");
+        SetEnvPair("EDEN_NX2_EXP22", "7");
+        SetEnvPair("EDEN_NX2_EXP26", "2");
+        SetEnvPair("EDEN_NX2_EXP27", "5");
+        SetEnvPair("EDEN_NX2_EXP30", "1");
+
+        SetEnvPair("EDEN_NX2_EXP17", "0");
+        SetEnvPair("EDEN_NX2_EXP18", "4");
+        SetEnvPair("EDEN_NX2_EXP19", "0");
+        SetEnvPair("EDEN_NX2_EXP29", "6");
+        SetEnvPair("EDEN_NX2_EXP31", "0");
+        SetEnvPair("EDEN_NX2_EXP32", "0");
+
+        SetEnvPair("EDEN_NX2_EXP23", "0");
+        SetEnvPair("EDEN_NX2_EXP37", "0");
+        SetEnvPair("EDEN_NX2_ARB_SPIN", "0");
+        SetEnvPair("EDEN_NX2_EXP60", "0");
+
+        SetEnvPair("EDEN_NX2_EXP8", "15");
+        SetEnvPair("EDEN_NX2_EXP9", "3");
+        SetEnvPair("EDEN_NX2_EXP10", "1");
+        SetEnvPair("EDEN_NX2_EXP14", "1");
+        SetEnvPair("EDEN_NX2_EXP21", "1");
+        SetEnvPair("EDEN_NX2_EXP34", "1");
+        SetEnvPair("EDEN_NX2_EXP35", "2");
+        SetEnvPair("EDEN_NX2_EXP39", "3");
+        SetEnvPair("EDEN_NX2_EXP42", "1");
+        SetEnvPair("EDEN_NX2_EXP43", "3");
+
+        SetEnvPair("__GL_SHADER_DISK_CACHE", "1");
+        SetEnvPair("__GL_SHADER_DISK_CACHE_SIZE", "10737418240");
+        SetEnvPair("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
+
+        if (exe_path[0] != '\0') {
+            char switch_path[MAX_PATH];
+            snprintf(switch_path, MAX_PATH, "%s\\nx2_switches.txt", exe_path);
+            LoadNx2SwitchesFile(switch_path);
+        }
+
+        char appdata[MAX_PATH] = {0};
+        if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
+            char appdata_switch[MAX_PATH];
+            snprintf(appdata_switch, MAX_PATH, "%s\\eden\\nx2_switches.txt", appdata);
+            LoadNx2SwitchesFile(appdata_switch);
+        }
+
+        InitializeStep7KernelTimerAndQoS(&actual_res);
+    }
+
+    LogActiveStepSwitches("v5.6", actual_res);
+    HANDLE monitor = CreateThread(NULL, 0, MonitorThread, NULL, 0, NULL);
+    if (monitor) CloseHandle(monitor);
+    HANDLE discord = CreateThread(NULL, 0, DiscordRpcThread, NULL, 0, NULL);
+    if (discord) CloseHandle(discord);
+}
+
+static int (__cdecl *s_orig_initialize_narrow_environment)(void) = NULL;
+
+static int __cdecl InitializeProxyFromStartup(void) {
+    int result = s_orig_initialize_narrow_environment();
+    static LONG initialized = 0;
+    if (result == 0 && InterlockedCompareExchange(&initialized, 1, 0) == 0) {
+        InitializeProxy();
+    }
+    return result;
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
     if (fdwReason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(hinstDLL);
         g_hInst = hinstDLL;
-
-        DetectSupportedRyzenCpu();
-        g_lang_vn = LoadLanguagePreference();
-        InstallQt6IATHooks();
-
-        // Environment variables for In-App Updater & What's New
-        SetEnvPair("EDEN_UPDATE_URL", "https://api.github.com/repos/yngvifreyr1810/Yngchii-X3D/releases?per_page=100");
-
-        char exe_path[MAX_PATH] = {0};
-        if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
-            char* last_slash = strrchr(exe_path, '\\');
-            if (last_slash) {
-                *last_slash = '\0';
-                char notes_path[MAX_PATH];
-                snprintf(notes_path, MAX_PATH, "%s\\whats-new.md", exe_path);
-                SetEnvPair("FRITCHII_NOTES_PREVIEW", notes_path);
-            }
+        if (lpReserved) {
+            // The bundled EXE calls this from CRT startup, after the loader lock
+            // is released and before constructors/main read the preset or use Qt.
+            HookIAT(GetModuleHandleW(NULL), "api-ms-win-crt-runtime-l1-1-0.dll",
+                    "_initialize_narrow_environment", (void*)InitializeProxyFromStartup,
+                    (void**)&s_orig_initialize_narrow_environment);
         }
-
-        // Apply optimized preset on first launch
-        ApplyOptimizedPresetIfNeeded();
-
-        ULONG actual_res = 0;
-        if (g_is_supported_ryzen) {
-            SetEnvPair("VK_LOADER_LAYERS_DISABLE", "*NvCamera*,*NV_nomad*,*NVIDIA_Overlay*,*GalaxyOverlay*,*EOSOverlay*");
-            SetEnvPair("NV_ALLOW_ANSEL", "0");
-            SetEnvPair("ANSEL_SDK_DISABLE", "1");
-
-            SetEnvPair("EDEN_NX2_IDLE_PAUSE", "1");
-            SetEnvPair("EDEN_NX2_CORE_LOCK", "1");
-            SetEnvPair("EDEN_NX2_IDLE_SPIN_US", "20");
-            SetEnvPair("EDEN_NX2_PIN_THREADS", "1");
-            SetEnvPair("EDEN_NX2_GUEST_PIN_EACH", "1");
-
-            SetEnvPair("EDEN_NX2_OOT_POLL_BACKOFF", "1");
-            SetEnvPair("EDEN_NX2_EXP25", "1");
-            SetEnvPair("EDEN_NX2_EXP24", "0");
-
-            SetEnvPair("EDEN_NX2_EXP12", "1");
-            SetEnvPair("EDEN_NX2_EXP22", "7");
-            SetEnvPair("EDEN_NX2_EXP26", "2");
-            SetEnvPair("EDEN_NX2_EXP27", "5");
-            SetEnvPair("EDEN_NX2_EXP30", "1");
-
-            SetEnvPair("EDEN_NX2_EXP17", "0");
-            SetEnvPair("EDEN_NX2_EXP18", "4");
-            SetEnvPair("EDEN_NX2_EXP19", "0");
-            SetEnvPair("EDEN_NX2_EXP29", "6");
-            SetEnvPair("EDEN_NX2_EXP31", "0");
-            SetEnvPair("EDEN_NX2_EXP32", "0");
-
-            SetEnvPair("EDEN_NX2_EXP23", "0");
-            SetEnvPair("EDEN_NX2_EXP37", "0");
-            SetEnvPair("EDEN_NX2_ARB_SPIN", "0");
-            SetEnvPair("EDEN_NX2_EXP60", "0");
-
-            SetEnvPair("EDEN_NX2_EXP8", "15");
-            SetEnvPair("EDEN_NX2_EXP9", "3");
-            SetEnvPair("EDEN_NX2_EXP10", "1");
-            SetEnvPair("EDEN_NX2_EXP14", "1");
-            SetEnvPair("EDEN_NX2_EXP21", "1");
-            SetEnvPair("EDEN_NX2_EXP34", "1");
-            SetEnvPair("EDEN_NX2_EXP35", "2");
-            SetEnvPair("EDEN_NX2_EXP39", "3");
-            SetEnvPair("EDEN_NX2_EXP42", "1");
-            SetEnvPair("EDEN_NX2_EXP43", "3");
-
-            SetEnvPair("__GL_SHADER_DISK_CACHE", "1");
-            SetEnvPair("__GL_SHADER_DISK_CACHE_SIZE", "10737418240");
-            SetEnvPair("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
-
-            if (exe_path[0] != '\0') {
-                char switch_path[MAX_PATH];
-                snprintf(switch_path, MAX_PATH, "%s\\nx2_switches.txt", exe_path);
-                LoadNx2SwitchesFile(switch_path);
-            }
-
-            char appdata[MAX_PATH] = {0};
-            if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
-                char appdata_switch[MAX_PATH];
-                snprintf(appdata_switch, MAX_PATH, "%s\\eden\\nx2_switches.txt", appdata);
-                LoadNx2SwitchesFile(appdata_switch);
-            }
-
-            InitializeStep7KernelTimerAndQoS(&actual_res);
-        }
-
-        LogActiveStepSwitches("v5.6", actual_res);
-        CreateThread(NULL, 0, MonitorThread, NULL, 0, NULL);
-        CreateThread(NULL, 0, DiscordRpcThread, NULL, 0, NULL);
     }
     return TRUE;
 }

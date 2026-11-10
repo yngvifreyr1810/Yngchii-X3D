@@ -124,19 +124,25 @@ def main():
         with open(temp_c, "w", encoding="utf-8") as f:
             f.write(c_code)
 
-        # Try clang first, then gcc
-        compiler = shutil.which("clang") or shutil.which("gcc") or "clang"
+        # Compile the C++ proxy with llvm-mingw when available.
+        compiler = shutil.which("x86_64-w64-mingw32-clang++") or shutil.which("clang++")
         compile_cmd = [
-            compiler, "-shared", "-O3", "-s",
-            "-o", dll_out,
-            temp_c, def_path,
-            "-lntdll", "-luser32", "-lgdi32", "-lkernel32", "-lcomctl32", "-lwinmm"
+            compiler, "--target=x86_64-w64-windows-gnu", "-fuse-ld=lld",
+            "-x", "c++", "-shared", "-O3", "-static", "-march=x86-64",
+            temp_c, "-x", "none", def_path, "-o", dll_out,
+            "-Wl,--delayload=gdiplus.dll,--no-insert-timestamp",
+            "-luser32", "-lkernel32", "-lgdi32", "-lwinmm", "-ladvapi32",
+            "-lgdiplus", "-ldelayimp", "-lshlwapi", "-lole32",
         ]
-        comp_res = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
-        if comp_res.returncode == 0:
+        comp_res = (
+            subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+            if compiler else None
+        )
+        if comp_res and comp_res.returncode == 0:
             print("version.dll compiled successfully!")
         else:
-            print(f"Warning: Compilation failed ({comp_res.stderr.strip()}). Checking fallback.")
+            error = comp_res.stderr.strip() if comp_res else "clang++ unavailable"
+            print(f"Warning: Compilation failed ({error}). Checking fallback.")
             fallback_dll = os.path.join(assets_dir, "version.dll")
             if os.path.exists(fallback_dll):
                 shutil.copy2(fallback_dll, dll_out)
