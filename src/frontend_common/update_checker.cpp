@@ -344,6 +344,10 @@ std::optional<Common::Net::Asset> SelectFritchiiAsset(const Common::Net::Release
     return asset;
 }
 
+bool HiddenFromUpdater(const Common::Net::Release& release) {
+    return release.body.find(HiddenReleaseMarker) != std::string::npos;
+}
+
 std::optional<Common::Net::Release> SelectFritchiiUpdate(
     std::span<const Common::Net::Release> releases, const FritchiiVersion& current,
     const Source& source) {
