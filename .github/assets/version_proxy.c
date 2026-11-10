@@ -1131,6 +1131,18 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                                 s_pfn_show(scroll);
                             }
                             s_game_scroll_area = scroll;
+                            if (s_hwndMain && IsWindow(s_hwndMain)) {
+                                RECT wr;
+                                if (GetWindowRect(s_hwndMain, &wr) && (wr.right - wr.left > 1280 || wr.bottom - wr.top > 820)) {
+                                    int screen_w = GetSystemMetrics(SM_CXSCREEN);
+                                    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+                                    int win_w = 1280;
+                                    int win_h = 800;
+                                    int win_x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
+                                    int win_y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
+                                    SetWindowPos(s_hwndMain, NULL, win_x, win_y, win_w, win_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                                }
+                            }
                         }
                     }
                 }
@@ -1883,6 +1895,17 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
         LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
         if (!(style & WS_CLIPCHILDREN)) {
             SetWindowLongPtrW(hWnd, GWL_STYLE, style | WS_CLIPCHILDREN);
+        }
+
+        RECT wr_init;
+        if (GetWindowRect(hWnd, &wr_init) && (wr_init.right - wr_init.left > 1280 || wr_init.bottom - wr_init.top > 820)) {
+            int screen_w = GetSystemMetrics(SM_CXSCREEN);
+            int screen_h = GetSystemMetrics(SM_CYSCREEN);
+            int win_w = 1280;
+            int win_h = 800;
+            int win_x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
+            int win_y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
+            SetWindowPos(hWnd, NULL, win_x, win_y, win_w, win_h, SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         WNDCLASSEXW wc;
