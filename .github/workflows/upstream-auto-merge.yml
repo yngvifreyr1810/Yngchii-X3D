@@ -130,9 +130,14 @@ jobs:
             BRANCH_NAME="sync/upstream-v${VERSION_NUM}"
             OPEN_PR=$(gh pr list --head "$BRANCH_NAME" --base main --state open --json number --jq '.[0].number // empty')
             if [ -z "$OPEN_PR" ]; then
-              git push origin "$REVIEW_HEAD:refs/heads/$BRANCH_NAME"
-              gh pr create --base main --head "$BRANCH_NAME" \
-                --title "Sync upstream $UPSTREAM_TAG into Yngchii-X3D" --body "$REVIEW_REASON"
+              if ! git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null; then
+                git push origin "$REVIEW_HEAD:refs/heads/$BRANCH_NAME"
+              fi
+              if ! gh pr create --base main --head "$BRANCH_NAME" \
+                --title "Sync upstream $UPSTREAM_TAG into Yngchii-X3D" --body "$REVIEW_REASON"; then
+                echo "::warning::Review branch is ready, but GitHub Actions could not create its PR."
+                echo "[Open the upstream sync PR](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH_NAME}?expand=1)" >> "$GITHUB_STEP_SUMMARY"
+              fi
             fi
             echo "merge_status=review" >> "$GITHUB_OUTPUT"
             exit 0
