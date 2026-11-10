@@ -88,7 +88,36 @@ def patch_exe_icon(exe_path, pkl_path=None, rcc_ico_path=None):
             else:
                 print("Warning: RCC ICO signature not found in exe!")
 
-    print(f"Successfully patched all icons into {exe_path}!")
+    # 3. Patch Home List View in Yngchii-X3D.exe
+    with open(exe_path, 'r+b') as f:
+        exe_data = f.read()
+        # Patch 1: Loop condition at 0x15c397b (jne 0x1415c462a -> 6 NOPs)
+        if exe_data[0x15c397b:0x15c397b+6] == bytes.fromhex('0f85a9000000'):
+            f.seek(0x15c397b)
+            f.write(b'\x90' * 6)
+            print("Patched Home::Refresh loop to display all games without skipping active game!")
+        # Patch 2: setToolButtonStyle (mov edx, 3 -> mov edx, 2)
+        if exe_data[0x15c4acf:0x15c4acf+5] == bytes.fromhex('ba03000000'):
+            f.seek(0x15c4acf)
+            f.write(bytes.fromhex('ba02000000'))
+            print("Patched setToolButtonStyle to Qt::ToolButtonTextBesideIcon!")
+        # Patch 3: icon size (72x72 -> 56x56)
+        if exe_data[0x15c4ae6:0x15c4ae6+10] == bytes.fromhex('48b84800000048000000'):
+            f.seek(0x15c4ae6)
+            f.write(bytes.fromhex('48b83800000038000000'))
+            print("Patched tile icon size to 56x56!")
+        # Patch 4: setFixedWidth(112) -> 14 NOPs
+        if exe_data[0x15c4b00:0x15c4b00+14] == bytes.fromhex('4c89f1ba70000000ff1532423601'):
+            f.seek(0x15c4b00)
+            f.write(b'\x90' * 14)
+            print("Patched tile setFixedWidth(112) out (14 NOPs)!")
+        # Patch 5: elide width (96 -> 1000)
+        if exe_data[0x15c4b61:0x15c4b61+8] == bytes.fromhex('c744242060000000'):
+            f.seek(0x15c4b61)
+            f.write(bytes.fromhex('c7442420e8030000'))
+            print("Patched tile title elide width to 1000px!")
+
+    print(f"Successfully patched all icons & list view into {exe_path}!")
 
 if __name__ == '__main__':
     target = sys.argv[1] if len(sys.argv) > 1 else r'D:\SB\Yngchii-v5.6\Yngchii-X3D.exe'

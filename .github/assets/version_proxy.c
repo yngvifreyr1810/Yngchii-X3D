@@ -523,6 +523,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
     typedef void (*pfn_setIconSize)(void* this_ptr, const void* qsize_ptr);
     typedef void (*pfn_setMinimumHeight)(void* this_ptr, int h);
     typedef void (*pfn_setMinimumWidth)(void* this_ptr, int w);
+    typedef void (*pfn_setMaximumWidth)(void* this_ptr, int w);
+    typedef int (*pfn_minimumWidth)(const void* this_ptr);
     typedef void* (*pfn_toolTip)(const void* this_ptr, void* ret_qstr);
     typedef void (*pfn_setStyleSheet)(void* this_ptr, const void* qstr_ptr);
 
@@ -556,6 +558,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
     static pfn_setIconSize s_pfn_setIconSize = NULL;
     static pfn_setMinimumHeight s_pfn_setMinimumHeight = NULL;
     static pfn_setMinimumWidth s_pfn_setMinimumWidth = NULL;
+    static pfn_setMaximumWidth s_pfn_setMaximumWidth = NULL;
+    static pfn_minimumWidth s_pfn_minimumWidth = NULL;
     static pfn_toolTip s_pfn_toolTip = NULL;
     static pfn_setStyleSheet s_pfn_setStyleSheet = NULL;
     static pfn_pixmapFromWinHICON s_pfn_pixmapFromWinHICON = NULL;
@@ -593,6 +597,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         s_pfn_setIconSize = (pfn_setIconSize)GetProcAddress(hWidgets, "?setIconSize@QAbstractButton@@QEAAXAEBVQSize@@@Z");
         s_pfn_setMinimumHeight = (pfn_setMinimumHeight)GetProcAddress(hWidgets, "?setMinimumHeight@QWidget@@QEAAXH@Z");
         s_pfn_setMinimumWidth = (pfn_setMinimumWidth)GetProcAddress(hWidgets, "?setMinimumWidth@QWidget@@QEAAXH@Z");
+        s_pfn_setMaximumWidth = (pfn_setMaximumWidth)GetProcAddress(hWidgets, "?setMaximumWidth@QWidget@@QEAAXH@Z");
+        s_pfn_minimumWidth = (pfn_minimumWidth)GetProcAddress(hWidgets, "?minimumWidth@QWidget@@QEBAHXZ");
         s_pfn_toolTip = (pfn_toolTip)GetProcAddress(hWidgets, "?toolTip@QWidget@@QEBA?AVQString@@XZ");
         s_pfn_setStyleSheet = (pfn_setStyleSheet)GetProcAddress(hWidgets, "?setStyleSheet@QWidget@@QEAAXAEBVQString@@@Z");
         if (hGui) {
@@ -639,11 +645,11 @@ static void TriggerLiveQtWidgetTranslation(int force) {
     s_pfn_allWidgets(&widget_list);
 
     static int s_last_lang = -1;
-    if (!force && s_last_lang == g_lang_vn) {
-        s_in_translation = 0;
-        return;
-    }
+    static int s_last_mode = -1;
+    int lang_changed = (s_last_lang != g_lang_vn);
+    int mode_changed = (s_last_mode != s_modern_home_list);
     s_last_lang = g_lang_vn;
+    s_last_mode = s_modern_home_list;
 
     if (widget_list.ptr && widget_list.size > 0) {
         for (int64_t i = 0; i < widget_list.size; i++) {
@@ -677,8 +683,9 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         struct { int w, h; } sz = {56, 56};
                         s_pfn_setIconSize(w, &sz);
                     }
-                    if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 64);
-                    if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 640);
+                    if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 68);
+                    if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 720);
+                    if (s_pfn_setMaximumWidth) s_pfn_setMaximumWidth(w, 16777215);
 
                     if (s_pfn_toolTip && s_pfn_btn_setText) {
                         char q_tip[32] = {0};
@@ -696,12 +703,15 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         s_pfn_dtor(q_tip);
                     }
 
-                    if (s_pfn_setStyleSheet) {
-                        const char* ss = "QToolButton#FritchiiTile { background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 6px 14px; text-align: left; font-size: 13px; font-weight: 500; color: #f4f4f5; } QToolButton#FritchiiTile:hover { background: #222227; border-color: #a78bfa; color: #ffffff; }";
-                        char q_ss[32] = {0};
-                        s_pfn_fromUtf8_str(q_ss, ss, -1);
-                        s_pfn_setStyleSheet(w, q_ss);
-                        s_pfn_dtor(q_ss);
+                    int cur_min_w = s_pfn_minimumWidth ? s_pfn_minimumWidth(w) : 0;
+                    if (force || lang_changed || mode_changed || cur_min_w < 600) {
+                        if (s_pfn_setStyleSheet) {
+                            const char* ss = "QToolButton#FritchiiTile { background: #1a1a1e; border: 1px solid #2a2a30; border-radius: 10px; padding: 10px 16px; text-align: left; font-size: 14px; font-weight: 600; color: #f4f4f5; } QToolButton#FritchiiTile:hover { background: #26262e; border-color: #8b5cf6; color: #ffffff; }";
+                            char q_ss[32] = {0};
+                            s_pfn_fromUtf8_str(q_ss, ss, -1);
+                            s_pfn_setStyleSheet(w, q_ss);
+                            s_pfn_dtor(q_ss);
+                        }
                     }
                 } else {
                     if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 3);
@@ -711,13 +721,21 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                     }
                     if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 0);
                     if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 0);
-                    if (s_pfn_setStyleSheet) {
-                        char q_ss[32] = {0};
-                        s_pfn_fromUtf8_str(q_ss, "", -1);
-                        s_pfn_setStyleSheet(w, q_ss);
-                        s_pfn_dtor(q_ss);
+                    if (s_pfn_setMaximumWidth) s_pfn_setMaximumWidth(w, 16777215);
+                    if (force || lang_changed || mode_changed) {
+                        if (s_pfn_setStyleSheet) {
+                            char q_ss[32] = {0};
+                            s_pfn_fromUtf8_str(q_ss, "", -1);
+                            s_pfn_setStyleSheet(w, q_ss);
+                            s_pfn_dtor(q_ss);
+                        }
                     }
                 }
+                continue;
+            }
+
+            // For other widgets: only re-translate if language changed or forced
+            if (!force && !lang_changed) {
                 continue;
             }
 
@@ -1077,6 +1095,11 @@ static void GetToggleSwitchGeometry(HWND hMainWnd, int* out_x, int* out_y, int* 
 }
 
 static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_YNGCHII_LANG_TOGGLE || uMsg == WM_YNGCHII_REFRESH_VIEW) {
+        TriggerLiveQtWidgetTranslation(1);
+        return 0;
+    }
+
     if (uMsg == WM_YNGCHII_INIT_BTN) {
         s_is_in_game = IsInGameWindow(hWnd);
         if (s_is_in_game) {
