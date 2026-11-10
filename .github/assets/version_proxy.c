@@ -511,6 +511,7 @@ typedef void (*pfn_setIconSize)(void* this_ptr, const void* qsize_ptr);
 typedef void (*pfn_setMinimumHeight)(void* this_ptr, int h);
 typedef void (*pfn_setMinimumWidth)(void* this_ptr, int w);
 typedef void (*pfn_setMaximumWidth)(void* this_ptr, int w);
+typedef void (*pfn_setFixedHeight)(void* this_ptr, int h);
 typedef int (*pfn_minimumWidth)(const void* this_ptr);
 typedef void* (*pfn_toolTip)(const void* this_ptr, void* ret_qstr);
 typedef void (*pfn_setStyleSheet)(void* this_ptr, const void* qstr_ptr);
@@ -543,6 +544,39 @@ typedef void* (*pfn_qitem_child)(void* item_this, int row, int column);
 typedef void* (*pfn_qitem_data)(void* item_this, void* ret_qvariant, int role);
 typedef void* (*pfn_qvariant_toString)(const void* qvariant_this, void* ret_qstring);
 typedef void (*pfn_qvariant_dtor)(void* qvariant_ptr);
+
+// QScrollArea
+typedef void* (*pfn_scroll_ctor)(void* this_ptr, void* parent);
+typedef void (*pfn_setWidget)(void* this_ptr, void* widget);
+typedef void (*pfn_setWidgetResizable)(void* this_ptr, char resizable);
+typedef void (*pfn_setFrameShape)(void* this_ptr, int shape);
+typedef void (*pfn_setScrollBarPolicy)(void* this_ptr, int policy);
+
+// QLayout / QBoxLayout
+typedef void (*pfn_removeWidget)(void* layout_ptr, void* widget);
+typedef void (*pfn_insertWidget)(void* layout_ptr, int index, void* widget, int stretch, int alignment);
+typedef void (*pfn_addWidget)(void* layout_ptr, void* widget, int stretch, int alignment);
+typedef void* (*pfn_hbox_ctor)(void* this_ptr, void* parent);
+typedef void (*pfn_setContentsMargins)(void* layout_ptr, int left, int top, int right, int bottom);
+typedef void (*pfn_setSpacing)(void* layout_ptr, int spacing);
+
+// QLabel / QWidget / QObject
+typedef void* (*pfn_lbl_ctor)(void* this_ptr, void* parent, int flags);
+typedef void (*pfn_lbl_setText)(void* this_ptr, const void* qstr_ptr);
+typedef void (*pfn_setAttribute)(void* this_ptr, int attribute, char on);
+typedef void (*pfn_setFixedWidth)(void* this_ptr, int w);
+typedef void (*pfn_setAlignment)(void* this_ptr, int alignment);
+typedef void (*pfn_setWordWrap)(void* this_ptr, char on);
+typedef void (*pfn_hide)(void* this_ptr);
+typedef void (*pfn_show)(void* this_ptr);
+typedef void (*pfn_setObjectName)(void* this_ptr, const void* qstr_name);
+
+typedef struct {
+    void* d;
+    void** ptr;
+    int64_t size;
+} Qt6List;
+typedef const Qt6List* (*pfn_children)(const void* obj_this);
 
 static pfn_allWidgets s_pfn_allWidgets = NULL;
 static pfn_inherits s_pfn_inherits = NULL;
@@ -591,8 +625,36 @@ static pfn_qitem_data s_pfn_qitem_data = NULL;
 static pfn_qvariant_toString s_pfn_qvariant_toString = NULL;
 static pfn_qvariant_dtor s_pfn_qvariant_dtor = NULL;
 
+static pfn_scroll_ctor s_pfn_scroll_ctor = NULL;
+static pfn_setWidget s_pfn_setWidget = NULL;
+static pfn_setWidgetResizable s_pfn_setWidgetResizable = NULL;
+static pfn_setFrameShape s_pfn_setFrameShape = NULL;
+static pfn_setScrollBarPolicy s_pfn_setHScrollBarPolicy = NULL;
+static pfn_setScrollBarPolicy s_pfn_setVScrollBarPolicy = NULL;
+
+static pfn_removeWidget s_pfn_removeWidget = NULL;
+static pfn_insertWidget s_pfn_insertWidget = NULL;
+static pfn_addWidget s_pfn_addWidget = NULL;
+static pfn_hbox_ctor s_pfn_hbox_ctor = NULL;
+static pfn_setContentsMargins s_pfn_setContentsMargins = NULL;
+static pfn_setSpacing s_pfn_setSpacing = NULL;
+
+static pfn_lbl_ctor s_pfn_lbl_ctor = NULL;
+static pfn_setAttribute s_pfn_setAttribute = NULL;
+static pfn_setFixedWidth s_pfn_setFixedWidth = NULL;
+static pfn_setFixedHeight s_pfn_setFixedHeight = NULL;
+static pfn_setAlignment s_pfn_setAlignment = NULL;
+static pfn_setWordWrap s_pfn_setWordWrap = NULL;
+static pfn_hide s_pfn_hide = NULL;
+static pfn_show s_pfn_show = NULL;
+static pfn_setObjectName s_pfn_setObjectName = NULL;
+static pfn_children s_pfn_children = NULL;
+
+static void* s_game_scroll_area = NULL;
+
 typedef struct {
     char title[256];
+    char program_id[32];
     char file_type[32];
     char file_size[32];
     char play_time[64];
@@ -601,6 +663,44 @@ typedef struct {
 
 static GameMetaCache s_game_meta[128];
 static int s_game_meta_count = 0;
+
+static void ParseGameItemTitleAndId(char* raw_text, char* out_title, size_t title_sz, char* out_id, size_t id_sz) {
+    if (!raw_text || raw_text[0] == '\0') {
+        if (out_title && title_sz > 0) out_title[0] = '\0';
+        if (out_id && id_sz > 0) out_id[0] = '\0';
+        return;
+    }
+    char* nl = strchr(raw_text, '\n');
+    if (nl) {
+        *nl = '\0';
+        char* pid = nl + 1;
+        while (*pid == ' ' || *pid == '\r' || *pid == '\t') pid++;
+        if (pid[0] == '0' && (pid[1] == 'x' || pid[1] == 'X')) pid += 2;
+        char* end = pid + strlen(pid) - 1;
+        while (end >= pid && (*end == '\r' || *end == '\n' || *end == ' ' || *end == '\t')) {
+            *end = '\0';
+            end--;
+        }
+        if (out_id && id_sz > 0) {
+            strncpy(out_id, pid, id_sz - 1);
+            out_id[id_sz - 1] = '\0';
+            for (char* p = out_id; *p; p++) {
+                if (*p >= 'a' && *p <= 'f') *p = *p - 'a' + 'A';
+            }
+        }
+    } else {
+        if (out_id && id_sz > 0) out_id[0] = '\0';
+    }
+    char* tend = raw_text + strlen(raw_text) - 1;
+    while (tend >= raw_text && (*tend == '\r' || *tend == '\n' || *tend == ' ' || *tend == '\t')) {
+        *tend = '\0';
+        tend--;
+    }
+    if (out_title && title_sz > 0) {
+        strncpy(out_title, raw_text, title_sz - 1);
+        out_title[title_sz - 1] = '\0';
+    }
+}
 
 static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
     if (!item || !s_pfn_qitem_data || !s_pfn_qvariant_toString || !s_pfn_toUtf8 || !s_pfn_constData) {
@@ -623,6 +723,61 @@ static void HelperGetItemText(void* item, char* out_buf, size_t buf_size) {
     if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba);
     if (s_pfn_dtor) s_pfn_dtor(qstr);
     if (s_pfn_qvariant_dtor) s_pfn_qvariant_dtor(qvar);
+}
+
+static void PopulateGameMeta(void* tree_view) {
+    if (!tree_view || !s_pfn_view_model || !s_pfn_model_root) return;
+    void* model = s_pfn_view_model(tree_view);
+    if (!model || !s_pfn_inherits(model, "QStandardItemModel")) return;
+    void* root = s_pfn_model_root(model);
+    if (!root || !s_pfn_qitem_rowCount || !s_pfn_qitem_child) return;
+
+    int top_rows = s_pfn_qitem_rowCount(root);
+    if (top_rows <= 0) return;
+
+    int new_count = 0;
+    GameMetaCache temp_meta[128];
+    memset(temp_meta, 0, sizeof(temp_meta));
+
+    for (int r = 0; r < top_rows && new_count < 128; r++) {
+        void* top_item = s_pfn_qitem_child(root, r, 0);
+        if (!top_item) continue;
+        int sub_rows = s_pfn_qitem_rowCount(top_item);
+        if (sub_rows > 0) {
+            for (int sub = 0; sub < sub_rows && new_count < 128; sub++) {
+                void* game_item = s_pfn_qitem_child(top_item, sub, 0);
+                if (!game_item) continue;
+                char raw_title[256] = {0};
+                HelperGetItemText(game_item, raw_title, sizeof(raw_title));
+                if (raw_title[0] != '\0') {
+                    GameMetaCache* entry = &temp_meta[new_count++];
+                    ParseGameItemTitleAndId(raw_title, entry->title, sizeof(entry->title), entry->program_id, sizeof(entry->program_id));
+                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 1), entry->file_type, sizeof(entry->file_type));
+                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 2), entry->file_size, sizeof(entry->file_size));
+                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 3), entry->play_time, sizeof(entry->play_time));
+                    HelperGetItemText(s_pfn_qitem_child(top_item, sub, 4), entry->add_ons, sizeof(entry->add_ons));
+                }
+            }
+        } else {
+            char raw_title[256] = {0};
+            HelperGetItemText(top_item, raw_title, sizeof(raw_title));
+            if (raw_title[0] != '\0') {
+                GameMetaCache* entry = &temp_meta[new_count++];
+                ParseGameItemTitleAndId(raw_title, entry->title, sizeof(entry->title), entry->program_id, sizeof(entry->program_id));
+                if (s_pfn_model_item) {
+                    HelperGetItemText(s_pfn_model_item(model, r, 1), entry->file_type, sizeof(entry->file_type));
+                    HelperGetItemText(s_pfn_model_item(model, r, 2), entry->file_size, sizeof(entry->file_size));
+                    HelperGetItemText(s_pfn_model_item(model, r, 3), entry->play_time, sizeof(entry->play_time));
+                    HelperGetItemText(s_pfn_model_item(model, r, 4), entry->add_ons, sizeof(entry->add_ons));
+                }
+            }
+        }
+    }
+
+    if (new_count > 0) {
+        memcpy(s_game_meta, temp_meta, sizeof(temp_meta));
+        s_game_meta_count = new_count;
+    }
 }
 
 static void TriggerLiveQtWidgetTranslation(int force) {
@@ -690,6 +845,31 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         s_pfn_view_model = (pfn_view_model)GetProcAddress(hWidgets, "?model@QAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ");
         s_pfn_qvariant_toString = (pfn_qvariant_toString)GetProcAddress(hCore, "?toString@QVariant@@QEBA?AVQString@@XZ");
         s_pfn_qvariant_dtor = (pfn_qvariant_dtor)GetProcAddress(hCore, "??1QVariant@@QEAA@XZ");
+
+        s_pfn_scroll_ctor = (pfn_scroll_ctor)GetProcAddress(hWidgets, "??0QScrollArea@@QEAA@PEAVQWidget@@@Z");
+        s_pfn_setWidget = (pfn_setWidget)GetProcAddress(hWidgets, "?setWidget@QScrollArea@@QEAAXPEAVQWidget@@@Z");
+        s_pfn_setWidgetResizable = (pfn_setWidgetResizable)GetProcAddress(hWidgets, "?setWidgetResizable@QScrollArea@@QEAAX_N@Z");
+        s_pfn_setFrameShape = (pfn_setFrameShape)GetProcAddress(hWidgets, "?setFrameShape@QFrame@@QEAAXW4Shape@1@@Z");
+        s_pfn_setHScrollBarPolicy = (pfn_setScrollBarPolicy)GetProcAddress(hWidgets, "?setHorizontalScrollBarPolicy@QAbstractScrollArea@@QEAAXW4ScrollBarPolicy@Qt@@@Z");
+        s_pfn_setVScrollBarPolicy = (pfn_setScrollBarPolicy)GetProcAddress(hWidgets, "?setVerticalScrollBarPolicy@QAbstractScrollArea@@QEAAXW4ScrollBarPolicy@Qt@@@Z");
+
+        s_pfn_removeWidget = (pfn_removeWidget)GetProcAddress(hWidgets, "?removeWidget@QLayout@@QEAAXPEAVQWidget@@@Z");
+        s_pfn_insertWidget = (pfn_insertWidget)GetProcAddress(hWidgets, "?insertWidget@QBoxLayout@@QEAAXHPEAVQWidget@@HV?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
+        s_pfn_addWidget = (pfn_addWidget)GetProcAddress(hWidgets, "?addWidget@QBoxLayout@@QEAAXPEAVQWidget@@HV?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
+        s_pfn_hbox_ctor = (pfn_hbox_ctor)GetProcAddress(hWidgets, "??0QHBoxLayout@@QEAA@PEAVQWidget@@@Z");
+        s_pfn_setContentsMargins = (pfn_setContentsMargins)GetProcAddress(hWidgets, "?setContentsMargins@QLayout@@QEAAXHHHH@Z");
+        s_pfn_setSpacing = (pfn_setSpacing)GetProcAddress(hWidgets, "?setSpacing@QBoxLayout@@UEAAXH@Z");
+
+        s_pfn_lbl_ctor = (pfn_lbl_ctor)GetProcAddress(hWidgets, "??0QLabel@@QEAA@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z");
+        s_pfn_setAttribute = (pfn_setAttribute)GetProcAddress(hWidgets, "?setAttribute@QWidget@@QEAAXW4WidgetAttribute@Qt@@_N@Z");
+        s_pfn_setFixedWidth = (pfn_setFixedWidth)GetProcAddress(hWidgets, "?setFixedWidth@QWidget@@QEAAXH@Z");
+        s_pfn_setFixedHeight = (pfn_setFixedHeight)GetProcAddress(hWidgets, "?setFixedHeight@QWidget@@QEAAXH@Z");
+        s_pfn_setAlignment = (pfn_setAlignment)GetProcAddress(hWidgets, "?setAlignment@QLabel@@QEAAXV?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
+        s_pfn_setWordWrap = (pfn_setWordWrap)GetProcAddress(hWidgets, "?setWordWrap@QLabel@@QEAAX_N@Z");
+        s_pfn_hide = (pfn_hide)GetProcAddress(hWidgets, "?hide@QWidget@@QEAAXXZ");
+        s_pfn_show = (pfn_show)GetProcAddress(hWidgets, "?show@QWidget@@QEAAXXZ");
+        s_pfn_setObjectName = (pfn_setObjectName)GetProcAddress(hCore, "?setObjectName@QObject@@QEAAXAEBVQString@@@Z");
+        s_pfn_children = (pfn_children)GetProcAddress(hCore, "?children@QObject@@QEBAAEBV?$QList@PEAVQObject@@@@XZ");
     }
 
     if (!s_pfn_allWidgets || !s_pfn_inherits || !s_pfn_fromUtf8_str || !s_pfn_toUtf8 || !s_pfn_constData || !s_pfn_dtor) {
@@ -714,6 +894,15 @@ static void TriggerLiveQtWidgetTranslation(int force) {
     s_last_mode = s_modern_home_list;
 
     if (widget_list.ptr && widget_list.size > 0) {
+        // Pass 1: Extract game metadata from QTreeView first so it is available for all tiles
+        for (int64_t i = 0; i < widget_list.size; i++) {
+            void* w = widget_list.ptr[i];
+            if (!w) continue;
+            if (s_pfn_inherits(w, "QTreeView")) {
+                PopulateGameMeta(w);
+                break;
+            }
+        }
         for (int64_t i = 0; i < widget_list.size; i++) {
             void* w = widget_list.ptr[i];
             if (!w) continue;
@@ -733,97 +922,379 @@ static void TriggerLiveQtWidgetTranslation(int force) {
 
             // Modern Home List View on FritchiiTile
             if (strcmp(obj_name_buf, "FritchiiTile") == 0) {
-                int cur_min_w = s_pfn_minimumWidth ? s_pfn_minimumWidth(w) : 0; // Read BEFORE setMinimumWidth!
-                void* parent = s_pfn_parentWidget ? s_pfn_parentWidget(w) : NULL;
-                void* layout = (parent && s_pfn_layout) ? s_pfn_layout(parent) : NULL;
+                void* parent = s_pfn_parentWidget ? s_pfn_parentWidget(w) : NULL; // row_box
+                void* layout = (parent && s_pfn_layout) ? s_pfn_layout(parent) : NULL; // row layout
+
+                // 1. Wrap row_box in dedicated QScrollArea (YngchiiGameFrame) once
+                if (!s_game_scroll_area && parent && s_pfn_scroll_ctor && s_pfn_setWidget) {
+                    void* page = s_pfn_parentWidget ? s_pfn_parentWidget(parent) : NULL;
+                    void* page_layout = (page && s_pfn_layout) ? s_pfn_layout(page) : NULL;
+                    if (page_layout && s_pfn_removeWidget) {
+                        s_pfn_removeWidget(page_layout, parent);
+
+                        void* scroll = malloc(1024);
+                        if (scroll) {
+                            memset(scroll, 0, 1024);
+                            s_pfn_scroll_ctor(scroll, page);
+                            s_pfn_setWidget(scroll, parent);
+                            if (s_pfn_setWidgetResizable) s_pfn_setWidgetResizable(scroll, 1);
+                            if (s_pfn_setFrameShape) s_pfn_setFrameShape(scroll, 0); // NoFrame
+                            if (s_pfn_setHScrollBarPolicy) s_pfn_setHScrollBarPolicy(scroll, 1); // ScrollBarAlwaysOff
+                            if (s_pfn_setVScrollBarPolicy) s_pfn_setVScrollBarPolicy(scroll, 0); // ScrollBarAsNeeded
+
+                            if (s_pfn_setObjectName) {
+                                char q_on[32] = {0};
+                                s_pfn_fromUtf8_str(q_on, "YngchiiGameFrame", -1);
+                                s_pfn_setObjectName(scroll, q_on);
+                                s_pfn_dtor(q_on);
+                            }
+
+                            if (s_pfn_setStyleSheet) {
+                                const char* scroll_ss = 
+                                    "QScrollArea#YngchiiGameFrame { background: transparent; border: none; } "
+                                    "QScrollArea#YngchiiGameFrame > QWidget > QWidget { background: transparent; } "
+                                    "QScrollBar:vertical { width: 6px; background: transparent; margin: 0px; } "
+                                    "QScrollBar::handle:vertical { background: #3f3f46; border-radius: 3px; min-height: 24px; } "
+                                    "QScrollBar::handle:vertical:hover { background: #71717a; } "
+                                    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; } "
+                                    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }";
+                                char q_sss[32] = {0};
+                                s_pfn_fromUtf8_str(q_sss, scroll_ss, -1);
+                                s_pfn_setStyleSheet(scroll, q_sss);
+                                s_pfn_dtor(q_sss);
+                            }
+
+                            if (s_pfn_insertWidget) {
+                                s_pfn_insertWidget(page_layout, 2, scroll, 1, 0);
+                            } else if (s_pfn_addWidget) {
+                                s_pfn_addWidget(page_layout, scroll, 1, 0);
+                            }
+
+                            if (s_pfn_show) {
+                                s_pfn_show(parent);
+                                s_pfn_show(scroll);
+                            }
+                            s_game_scroll_area = scroll;
+                        }
+                    }
+                }
+
+                if (s_game_scroll_area) {
+                    if (s_modern_home_list) {
+                        if (s_pfn_setHScrollBarPolicy) s_pfn_setHScrollBarPolicy(s_game_scroll_area, 1); // ScrollBarAlwaysOff
+                        if (s_pfn_setVScrollBarPolicy) s_pfn_setVScrollBarPolicy(s_game_scroll_area, 0); // ScrollBarAsNeeded
+                    } else {
+                        if (s_pfn_setHScrollBarPolicy) s_pfn_setHScrollBarPolicy(s_game_scroll_area, 0); // ScrollBarAsNeeded
+                        if (s_pfn_setVScrollBarPolicy) s_pfn_setVScrollBarPolicy(s_game_scroll_area, 1); // ScrollBarAlwaysOff
+                    }
+                }
+
                 if (layout && s_pfn_setDirection) {
                     s_pfn_setDirection(layout, s_modern_home_list ? 2 : 0);
                 }
 
+                // 2. Read tile title from toolTip
+                char full_title_buf[256] = {0};
+                if (s_pfn_toolTip) {
+                    char q_tip[32] = {0};
+                    s_pfn_toolTip(w, q_tip);
+                    char q_ba[32] = {0};
+                    s_pfn_toUtf8(q_tip, q_ba);
+                    const char* ft = s_pfn_constData(q_ba);
+                    if (ft && ft[0] != '\0') {
+                        strncpy(full_title_buf, ft, sizeof(full_title_buf) - 1);
+                    }
+                    if (s_pfn_qba_dtor) s_pfn_qba_dtor(q_ba);
+                    s_pfn_dtor(q_tip);
+                }
+
+                // 3. Filter non-game tiles ("All games", "Add folder") in List View
+                int is_non_game = 0;
+                if (full_title_buf[0] != '\0') {
+                    if (strcmp(full_title_buf, "All games") == 0 || strcmp(full_title_buf, "Kho game") == 0 ||
+                        strcmp(full_title_buf, "Add folder") == 0 || strcmp(full_title_buf, "Thêm game") == 0 ||
+                        strstr(full_title_buf, "All games") != NULL || strstr(full_title_buf, "Kho game") != NULL ||
+                        strstr(full_title_buf, "Add folder") != NULL || strstr(full_title_buf, "Thêm game") != NULL) {
+                        is_non_game = 1;
+                    }
+                }
+
+                if (s_modern_home_list && is_non_game) {
+                    if (s_pfn_hide) s_pfn_hide(w);
+                    continue;
+                } else if (!s_modern_home_list && is_non_game) {
+                    if (s_pfn_show) s_pfn_show(w);
+                }
+
+                // 4. Find existing child labels on card via children()
+                void* card_layout = s_pfn_layout ? s_pfn_layout(w) : NULL;
+                void* lbl_info = NULL;
+                void* lbl_div = NULL;
+                void* lbl_meta = NULL;
+                void* lbl_stats = NULL;
+
+                const Qt6List* ch_list = s_pfn_children ? s_pfn_children(w) : NULL;
+                if (ch_list && ch_list->ptr && ch_list->size > 0) {
+                    for (int64_t c = 0; c < ch_list->size; c++) {
+                        void* child = ch_list->ptr[c];
+                        if (!child) continue;
+                        char child_name[64] = {0};
+                        if (s_pfn_objectName) {
+                            char qstr_c[32] = {0};
+                            s_pfn_objectName(child, qstr_c);
+                            char qba_c[32] = {0};
+                            s_pfn_toUtf8(qstr_c, qba_c);
+                            const char* cname = s_pfn_constData(qba_c);
+                            if (cname) strncpy(child_name, cname, sizeof(child_name) - 1);
+                            if (s_pfn_qba_dtor) s_pfn_qba_dtor(qba_c);
+                            s_pfn_dtor(qstr_c);
+                        }
+                        if (strcmp(child_name, "card_lbl_info") == 0) lbl_info = child;
+                        else if (strcmp(child_name, "card_div") == 0) lbl_div = child;
+                        else if (strcmp(child_name, "card_lbl_meta") == 0) lbl_meta = child;
+                        else if (strcmp(child_name, "card_lbl_stats") == 0) lbl_stats = child;
+                    }
+                }
+
                 if (s_modern_home_list) {
-                    if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 2);
+                    // Create QHBoxLayout if not present
+                    if (!card_layout && s_pfn_hbox_ctor) {
+                        card_layout = malloc(1024);
+                        if (card_layout) {
+                            memset(card_layout, 0, 1024);
+                            s_pfn_hbox_ctor(card_layout, w);
+                            if (s_pfn_setContentsMargins) s_pfn_setContentsMargins(card_layout, 104, 10, 18, 10);
+                            if (s_pfn_setSpacing) s_pfn_setSpacing(card_layout, 16);
+                        }
+                    }
+
+                    // Create 4 child widgets inside card_layout
+                    if (card_layout && s_pfn_lbl_ctor) {
+                        if (!lbl_info) {
+                            lbl_info = malloc(1024);
+                            if (lbl_info) {
+                                memset(lbl_info, 0, 1024);
+                                s_pfn_lbl_ctor(lbl_info, w, 0);
+                                if (s_pfn_setAttribute) s_pfn_setAttribute(lbl_info, 51, 1);
+                                if (s_pfn_setObjectName) {
+                                    char q_n[32] = {0};
+                                    s_pfn_fromUtf8_str(q_n, "card_lbl_info", -1);
+                                    s_pfn_setObjectName(lbl_info, q_n);
+                                    s_pfn_dtor(q_n);
+                                }
+                                if (s_pfn_addWidget) s_pfn_addWidget(card_layout, lbl_info, 1, 0);
+                            }
+                        }
+                        if (!lbl_div) {
+                            lbl_div = malloc(1024);
+                            if (lbl_div) {
+                                memset(lbl_div, 0, 1024);
+                                s_pfn_lbl_ctor(lbl_div, w, 0);
+                                if (s_pfn_setAttribute) s_pfn_setAttribute(lbl_div, 51, 1);
+                                if (s_pfn_setFixedWidth) s_pfn_setFixedWidth(lbl_div, 1);
+                                if (s_pfn_setObjectName) {
+                                    char q_n[32] = {0};
+                                    s_pfn_fromUtf8_str(q_n, "card_div", -1);
+                                    s_pfn_setObjectName(lbl_div, q_n);
+                                    s_pfn_dtor(q_n);
+                                }
+                                if (s_pfn_setStyleSheet) {
+                                    char q_ss[32] = {0};
+                                    s_pfn_fromUtf8_str(q_ss, "QLabel { background-color: #383844; margin: 4px 0px; }", -1);
+                                    s_pfn_setStyleSheet(lbl_div, q_ss);
+                                    s_pfn_dtor(q_ss);
+                                }
+                                if (s_pfn_addWidget) s_pfn_addWidget(card_layout, lbl_div, 0, 0);
+                            }
+                        }
+                        if (!lbl_meta) {
+                            lbl_meta = malloc(1024);
+                            if (lbl_meta) {
+                                memset(lbl_meta, 0, 1024);
+                                s_pfn_lbl_ctor(lbl_meta, w, 0);
+                                if (s_pfn_setAttribute) s_pfn_setAttribute(lbl_meta, 51, 1);
+                                if (s_pfn_setFixedWidth) s_pfn_setFixedWidth(lbl_meta, 190);
+                                if (s_pfn_setAlignment) s_pfn_setAlignment(lbl_meta, 0x0021); // Top-Left
+                                if (s_pfn_setObjectName) {
+                                    char q_n[32] = {0};
+                                    s_pfn_fromUtf8_str(q_n, "card_lbl_meta", -1);
+                                    s_pfn_setObjectName(lbl_meta, q_n);
+                                    s_pfn_dtor(q_n);
+                                }
+                                if (s_pfn_addWidget) s_pfn_addWidget(card_layout, lbl_meta, 0, 0);
+                            }
+                        }
+                        if (!lbl_stats) {
+                            lbl_stats = malloc(1024);
+                            if (lbl_stats) {
+                                memset(lbl_stats, 0, 1024);
+                                s_pfn_lbl_ctor(lbl_stats, w, 0);
+                                if (s_pfn_setAttribute) s_pfn_setAttribute(lbl_stats, 51, 1);
+                                if (s_pfn_setFixedWidth) s_pfn_setFixedWidth(lbl_stats, 110);
+                                if (s_pfn_setAlignment) s_pfn_setAlignment(lbl_stats, 0x0022); // Top-Right
+                                if (s_pfn_setObjectName) {
+                                    char q_n[32] = {0};
+                                    s_pfn_fromUtf8_str(q_n, "card_lbl_stats", -1);
+                                    s_pfn_setObjectName(lbl_stats, q_n);
+                                    s_pfn_dtor(q_n);
+                                }
+                                if (s_pfn_addWidget) s_pfn_addWidget(card_layout, lbl_stats, 0, 0);
+                            }
+                        }
+                    }
+
+                    // Card button sizing
+                    if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 2); // ToolButtonTextBesideIcon
                     if (s_pfn_setIconSize) {
-                        struct { int w, h; } sz = {56, 56};
+                        struct { int w, h; } sz = {80, 80};
                         s_pfn_setIconSize(w, &sz);
                     }
-                    if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 68);
+                    if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 104);
+                    if (s_pfn_setFixedHeight) s_pfn_setFixedHeight(w, 104);
                     if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 720);
                     if (s_pfn_setMaximumWidth) s_pfn_setMaximumWidth(w, 16777215);
 
-                    if (s_pfn_toolTip && s_pfn_btn_setText) {
-                        char q_tip[32] = {0};
-                        s_pfn_toolTip(w, q_tip);
-                        char q_ba[32] = {0};
-                        s_pfn_toUtf8(q_tip, q_ba);
-                        const char* full_title = s_pfn_constData(q_ba);
-                        if (full_title && full_title[0] != '\0') {
-                            char desc_line[512] = {0};
-                            for (int m = 0; m < s_game_meta_count; m++) {
-                                if (strcmp(s_game_meta[m].title, full_title) == 0) {
-                                    char parts[4][128] = {0};
-                                    int pcount = 0;
-                                    if (s_game_meta[m].file_type[0] != '\0') {
-                                        strncpy(parts[pcount++], s_game_meta[m].file_type, 127);
-                                    }
-                                    if (s_game_meta[m].file_size[0] != '\0') {
-                                        strncpy(parts[pcount++], s_game_meta[m].file_size, 127);
-                                    }
-                                    if (s_game_meta[m].play_time[0] != '\0') {
-                                        snprintf(parts[pcount++], 127, g_lang_vn ? "Giờ chơi: %s" : "Play time: %s", s_game_meta[m].play_time);
-                                    }
-                                    if (s_game_meta[m].add_ons[0] != '\0') {
-                                        strncpy(parts[pcount++], s_game_meta[m].add_ons, 127);
-                                    }
-                                    for (int pi = 0; pi < pcount; pi++) {
-                                        if (pi > 0) strncat(desc_line, "  •  ", sizeof(desc_line) - strlen(desc_line) - 1);
-                                        strncat(desc_line, parts[pi], sizeof(desc_line) - strlen(desc_line) - 1);
-                                    }
-                                    break;
-                                }
-                            }
-
-                            char combined[1024];
-                            if (desc_line[0] != '\0') {
-                                snprintf(combined, sizeof(combined), "%s\n%s", full_title, desc_line);
-                            } else {
-                                strncpy(combined, full_title, sizeof(combined) - 1);
-                                combined[sizeof(combined) - 1] = '\0';
-                            }
-
-                            char q_new[32] = {0};
-                            s_pfn_fromUtf8_str(q_new, combined, -1);
-                            s_pfn_btn_setText(w, q_new);
-                            s_pfn_dtor(q_new);
-                        }
-                        if (s_pfn_qba_dtor) s_pfn_qba_dtor(q_ba);
-                        s_pfn_dtor(q_tip);
+                    // Clear button text
+                    if (s_pfn_btn_setText) {
+                        char q_empty[32] = {0};
+                        s_pfn_fromUtf8_str(q_empty, "", -1);
+                        s_pfn_btn_setText(w, q_empty);
+                        s_pfn_dtor(q_empty);
                     }
 
-                    if (force || lang_changed || mode_changed || cur_min_w < 600) {
-                        if (s_pfn_setStyleSheet) {
-                            const char* ss = "QToolButton#FritchiiTile { background: #1a1a1e; border: 1px solid #2a2a30; border-radius: 10px; padding: 10px 16px; text-align: left; font-size: 14px; font-weight: 600; color: #f4f4f5; } QToolButton#FritchiiTile:hover { background: #26262e; border-color: #8b5cf6; color: #ffffff; }";
-                            char q_ss[32] = {0};
-                            s_pfn_fromUtf8_str(q_ss, ss, -1);
-                            s_pfn_setStyleSheet(w, q_ss);
-                            s_pfn_dtor(q_ss);
+                    // Look up metadata
+                    GameMetaCache* matched = NULL;
+                    for (int m = 0; m < s_game_meta_count; m++) {
+                        if (full_title_buf[0] != '\0' &&
+                            (strcmp(s_game_meta[m].title, full_title_buf) == 0 ||
+                             strstr(s_game_meta[m].title, full_title_buf) != NULL ||
+                             strstr(full_title_buf, s_game_meta[m].title) != NULL)) {
+                            matched = &s_game_meta[m];
+                            break;
                         }
+                    }
+
+                    const char* c_pid = (matched && matched->program_id[0]) ? matched->program_id : "0100000000010000";
+                    const char* c_ftype = (matched && matched->file_type[0]) ? matched->file_type : "NSP";
+                    const char* c_fsize = (matched && matched->file_size[0]) ? matched->file_size : "";
+                    const char* c_ptime = (matched && matched->play_time[0] && 
+                                           strcmp(matched->play_time, "00:00:00") != 0 &&
+                                           strcmp(matched->play_time, "--:--:--") != 0) ? matched->play_time : (g_lang_vn ? "Chưa chơi" : "Never");
+
+                    char c_ver[32] = "v1.0.0";
+                    char c_dev[64] = "Nintendo";
+                    char c_mod[64] = "Custom Config";
+
+                    if (matched && matched->add_ons[0] != '\0') {
+                        const char* up = strstr(matched->add_ons, "Update (");
+                        if (up) {
+                            const char* vstart = up + 8;
+                            const char* vend = strchr(vstart, ')');
+                            if (vend && (vend - vstart) < 20) {
+                                snprintf(c_ver, sizeof(c_ver), "v%.*s", (int)(vend - vstart), vstart);
+                            }
+                        }
+                        if (strstr(matched->add_ons, "DLC")) {
+                            strncpy(c_mod, "DLC • LayeredFS", sizeof(c_mod) - 1);
+                        } else {
+                            strncpy(c_mod, "LayeredFS", sizeof(c_mod) - 1);
+                        }
+                    }
+
+                    char h_info[1024];
+                    snprintf(h_info, sizeof(h_info),
+                        "<div>"
+                        "<div style=\"font-size: 14px; font-weight: 700; color: #ffffff;\">%s</div>"
+                        "<div style=\"font-size: 12px; color: #d1d5db; margin-top: 2px;\">%s</div>"
+                        "<div style=\"font-size: 11px; color: #9ca3af; margin-top: 1px;\">%s</div>"
+                        "<div style=\"margin-top: 4px;\">"
+                        "<span style=\"background-color: #1f4e3d; color: #4ade80; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;\">Playable</span>"
+                        "&nbsp;&nbsp;"
+                        "<span style=\"background-color: #3b2764; color: #c4b5fd; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;\">X3D Optimized</span>"
+                        "</div>"
+                        "</div>",
+                        full_title_buf, c_dev, c_ver);
+
+                    char h_meta[512];
+                    snprintf(h_meta, sizeof(h_meta),
+                        "<div>"
+                        "<div style=\"color: #e4e4e7; font-size: 12px; font-weight: 600; font-family: monospace;\">%s</div>"
+                        "<div style=\"color: #d4d4d8; font-size: 12px; margin-top: 4px;\">%s</div>"
+                        "<div style=\"color: #38bdf8; font-size: 11px; margin-top: 4px;\">%s</div>"
+                        "</div>",
+                        c_pid, c_ftype, c_mod);
+
+                    char h_stats[512];
+                    snprintf(h_stats, sizeof(h_stats),
+                        "<div style=\"text-align: right;\">"
+                        "<div style=\"color: #e4e4e7; font-size: 12px; font-weight: 600;\">%s</div>"
+                        "<div style=\"color: #d4d4d8; font-size: 12px; margin-top: 4px;\">%s</div>"
+                        "</div>",
+                        c_ptime, c_fsize);
+
+                    if (lbl_info && s_pfn_lbl_setText) {
+                        char q_h[32] = {0};
+                        s_pfn_fromUtf8_str(q_h, h_info, -1);
+                        s_pfn_lbl_setText(lbl_info, q_h);
+                        s_pfn_dtor(q_h);
+                    }
+                    if (lbl_meta && s_pfn_lbl_setText) {
+                        char q_h[32] = {0};
+                        s_pfn_fromUtf8_str(q_h, h_meta, -1);
+                        s_pfn_lbl_setText(lbl_meta, q_h);
+                        s_pfn_dtor(q_h);
+                    }
+                    if (lbl_stats && s_pfn_lbl_setText) {
+                        char q_h[32] = {0};
+                        s_pfn_fromUtf8_str(q_h, h_stats, -1);
+                        s_pfn_lbl_setText(lbl_stats, q_h);
+                        s_pfn_dtor(q_h);
+                    }
+
+                    if (s_pfn_show) {
+                        if (lbl_info) s_pfn_show(lbl_info);
+                        if (lbl_div) s_pfn_show(lbl_div);
+                        if (lbl_meta) s_pfn_show(lbl_meta);
+                        if (lbl_stats) s_pfn_show(lbl_stats);
+                    }
+
+                    if (s_pfn_setStyleSheet) {
+                        const char* card_css = 
+                            "QToolButton#FritchiiTile { background: #1e1e24; border: 1px solid #2e2e38; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
+                            "QToolButton#FritchiiTile:hover { background: #262630; border-color: #8b5cf6; }";
+                        char q_css[32] = {0};
+                        s_pfn_fromUtf8_str(q_css, card_css, -1);
+                        s_pfn_setStyleSheet(w, q_css);
+                        s_pfn_dtor(q_css);
                     }
                 } else {
-                    if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 3);
+                    // Grid View mode: restore default styling
+                    if (s_pfn_hide) {
+                        if (lbl_info) s_pfn_hide(lbl_info);
+                        if (lbl_div) s_pfn_hide(lbl_div);
+                        if (lbl_meta) s_pfn_hide(lbl_meta);
+                        if (lbl_stats) s_pfn_hide(lbl_stats);
+                    }
+                    if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 3); // ToolButtonTextUnderIcon
                     if (s_pfn_setIconSize) {
                         struct { int w, h; } sz = {72, 72};
                         s_pfn_setIconSize(w, &sz);
                     }
                     if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 0);
+                    if (s_pfn_setFixedHeight) s_pfn_setFixedHeight(w, 16777215);
                     if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 0);
                     if (s_pfn_setMaximumWidth) s_pfn_setMaximumWidth(w, 16777215);
-                    if (force || lang_changed || mode_changed) {
-                        if (s_pfn_setStyleSheet) {
-                            char q_ss[32] = {0};
-                            s_pfn_fromUtf8_str(q_ss, "", -1);
-                            s_pfn_setStyleSheet(w, q_ss);
-                            s_pfn_dtor(q_ss);
-                        }
+                    if (s_pfn_btn_setText && full_title_buf[0] != '\0') {
+                        char q_t[32] = {0};
+                        s_pfn_fromUtf8_str(q_t, full_title_buf, -1);
+                        s_pfn_btn_setText(w, q_t);
+                        s_pfn_dtor(q_t);
+                    }
+                    if (s_pfn_setStyleSheet) {
+                        char q_css[32] = {0};
+                        s_pfn_fromUtf8_str(q_css, "", -1);
+                        s_pfn_setStyleSheet(w, q_css);
+                        s_pfn_dtor(q_css);
                     }
                 }
                 continue;
@@ -894,56 +1365,8 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             }
 
             // QTreeView game metadata extraction
-            if (s_pfn_inherits(w, "QTreeView") && s_pfn_view_model && s_pfn_model_root) {
-                void* model = s_pfn_view_model(w);
-                if (model && s_pfn_inherits(model, "QStandardItemModel")) {
-                    void* root = s_pfn_model_root(model);
-                    if (root && s_pfn_qitem_rowCount && s_pfn_qitem_child) {
-                        int top_rows = s_pfn_qitem_rowCount(root);
-                        s_game_meta_count = 0;
-                        for (int r = 0; r < top_rows && s_game_meta_count < 128; r++) {
-                            void* top_item = s_pfn_qitem_child(root, r, 0);
-                            if (top_item) {
-                                int sub_rows = s_pfn_qitem_rowCount(top_item);
-                                if (sub_rows > 0) {
-                                    for (int sub = 0; sub < sub_rows && s_game_meta_count < 128; sub++) {
-                                        void* game_item = s_pfn_qitem_child(top_item, sub, 0);
-                                        if (game_item) {
-                                            char t[256] = {0};
-                                            HelperGetItemText(game_item, t, sizeof(t));
-                                            if (t[0] != '\0') {
-                                                GameMetaCache* entry = &s_game_meta[s_game_meta_count++];
-                                                strncpy(entry->title, t, sizeof(entry->title) - 1);
-                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 1), entry->file_type, sizeof(entry->file_type));
-                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 2), entry->file_size, sizeof(entry->file_size));
-                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 3), entry->play_time, sizeof(entry->play_time));
-                                                HelperGetItemText(s_pfn_qitem_child(top_item, sub, 4), entry->add_ons, sizeof(entry->add_ons));
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    char t[256] = {0};
-                                    HelperGetItemText(top_item, t, sizeof(t));
-                                    if (t[0] != '\0') {
-                                        GameMetaCache* entry = &s_game_meta[s_game_meta_count++];
-                                        strncpy(entry->title, t, sizeof(entry->title) - 1);
-                                        if (s_pfn_model_item) {
-                                            HelperGetItemText(s_pfn_model_item(model, r, 1), entry->file_type, sizeof(entry->file_type));
-                                            HelperGetItemText(s_pfn_model_item(model, r, 2), entry->file_size, sizeof(entry->file_size));
-                                            HelperGetItemText(s_pfn_model_item(model, r, 3), entry->play_time, sizeof(entry->play_time));
-                                            HelperGetItemText(s_pfn_model_item(model, r, 4), entry->add_ons, sizeof(entry->add_ons));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // For all other static widgets: skip if language did not change and not forced
-            if (!force && !lang_changed) {
+            if (s_pfn_inherits(w, "QTreeView")) {
+                PopulateGameMeta(w);
                 continue;
             }
 
