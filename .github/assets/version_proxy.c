@@ -512,6 +512,8 @@ static void TriggerQtRetranslate(void) {
 static HWND s_hwndMain = NULL;
 static HWND s_hwndLangBtn = NULL;
 static WNDPROC s_origMainWndProc = NULL;
+static int s_modern_home_list = 1;
+static HICON g_hChainsaw = NULL;
 
 // Vertical Toggle Switch state:
 // s_knob_pos = 0.0f (Top = EN), 1.0f (Bottom = VN)
@@ -537,6 +539,20 @@ static void TriggerLiveQtWidgetTranslation(void) {
 
     typedef void* (*pfn_allWidgets)(void* ret_qlist);
     typedef BOOL (*pfn_inherits)(void* this_ptr, const char* className);
+    typedef void* (*pfn_objectName)(const void* this_ptr, void* ret_qstr);
+    typedef void* (*pfn_parentWidget)(void* this_ptr);
+    typedef void* (*pfn_layout)(void* this_ptr);
+    typedef void (*pfn_setDirection)(void* layout_ptr, int dir);
+    typedef void (*pfn_setToolButtonStyle)(void* this_ptr, int style);
+    typedef void (*pfn_setIconSize)(void* this_ptr, const void* qsize_ptr);
+    typedef void (*pfn_setMinimumHeight)(void* this_ptr, int h);
+    typedef void (*pfn_setMinimumWidth)(void* this_ptr, int w);
+    typedef void* (*pfn_toolTip)(const void* this_ptr, void* ret_qstr);
+    typedef void (*pfn_setStyleSheet)(void* this_ptr, const void* qstr_ptr);
+
+    typedef void* (*pfn_pixmapFromWinHICON)(void* ret_qpixmap, HICON hIcon);
+    typedef void (*pfn_setPixmap)(void* this_ptr, const void* qpixmap_ptr);
+    typedef void (*pfn_dtor_pixmap)(void* qpixmap_ptr);
     typedef void* (*pfn_fromUtf8_str)(void* ret_qstr, const char* str, int64_t size);
     typedef void* (*pfn_toUtf8)(const void* qstr_this, void* ret_qba);
     typedef const char* (*pfn_constData)(const void* qba_this);
@@ -555,6 +571,19 @@ static void TriggerLiveQtWidgetTranslation(void) {
 
     static pfn_allWidgets s_pfn_allWidgets = NULL;
     static pfn_inherits s_pfn_inherits = NULL;
+    static pfn_objectName s_pfn_objectName = NULL;
+    static pfn_parentWidget s_pfn_parentWidget = NULL;
+    static pfn_layout s_pfn_layout = NULL;
+    static pfn_setDirection s_pfn_setDirection = NULL;
+    static pfn_setToolButtonStyle s_pfn_setToolButtonStyle = NULL;
+    static pfn_setIconSize s_pfn_setIconSize = NULL;
+    static pfn_setMinimumHeight s_pfn_setMinimumHeight = NULL;
+    static pfn_setMinimumWidth s_pfn_setMinimumWidth = NULL;
+    static pfn_toolTip s_pfn_toolTip = NULL;
+    static pfn_setStyleSheet s_pfn_setStyleSheet = NULL;
+    static pfn_pixmapFromWinHICON s_pfn_pixmapFromWinHICON = NULL;
+    static pfn_setPixmap s_pfn_setPixmap = NULL;
+    static pfn_dtor_pixmap s_pfn_dtor_pixmap = NULL;
     static pfn_fromUtf8_str s_pfn_fromUtf8_str = NULL;
     static pfn_toUtf8 s_pfn_toUtf8 = NULL;
     static pfn_constData s_pfn_constData = NULL;
@@ -578,6 +607,21 @@ static void TriggerLiveQtWidgetTranslation(void) {
     if (!s_pfn_allWidgets) {
         s_pfn_allWidgets = (pfn_allWidgets)GetProcAddress(hWidgets, "?allWidgets@QApplication@@SA?AV?$QList@PEAVQWidget@@@@XZ");
         s_pfn_inherits = (pfn_inherits)GetProcAddress(hCore, "?inherits@QObject@@QEBA_NPEBD@Z");
+        s_pfn_objectName = (pfn_objectName)GetProcAddress(hCore, "?objectName@QObject@@QEBA?AVQString@@XZ");
+        s_pfn_parentWidget = (pfn_parentWidget)GetProcAddress(hWidgets, "?parentWidget@QWidget@@QEBAPEAV1@XZ");
+        s_pfn_layout = (pfn_layout)GetProcAddress(hWidgets, "?layout@QWidget@@QEBAPEAVQLayout@@XZ");
+        s_pfn_setDirection = (pfn_setDirection)GetProcAddress(hWidgets, "?setDirection@QBoxLayout@@QEAAXW4Direction@1@@Z");
+        s_pfn_setToolButtonStyle = (pfn_setToolButtonStyle)GetProcAddress(hWidgets, "?setToolButtonStyle@QToolButton@@QEAAXW4ToolButtonStyle@Qt@@@Z");
+        s_pfn_setIconSize = (pfn_setIconSize)GetProcAddress(hWidgets, "?setIconSize@QAbstractButton@@QEAAXAEBVQSize@@@Z");
+        s_pfn_setMinimumHeight = (pfn_setMinimumHeight)GetProcAddress(hWidgets, "?setMinimumHeight@QWidget@@QEAAXH@Z");
+        s_pfn_setMinimumWidth = (pfn_setMinimumWidth)GetProcAddress(hWidgets, "?setMinimumWidth@QWidget@@QEAAXH@Z");
+        s_pfn_toolTip = (pfn_toolTip)GetProcAddress(hWidgets, "?toolTip@QWidget@@QEBA?AVQString@@XZ");
+        s_pfn_setStyleSheet = (pfn_setStyleSheet)GetProcAddress(hWidgets, "?setStyleSheet@QWidget@@QEAAXAEBVQString@@@Z");
+        if (hGui) {
+            s_pfn_pixmapFromWinHICON = (pfn_pixmapFromWinHICON)GetProcAddress(hGui, "?qt_pixmapFromWinHICON@@YA?AVQPixmap@@PEAUHICON__@@@Z");
+            s_pfn_dtor_pixmap = (pfn_dtor_pixmap)GetProcAddress(hGui, "??1QPixmap@@UEAA@XZ");
+        }
+        s_pfn_setPixmap = (pfn_setPixmap)GetProcAddress(hWidgets, "?setPixmap@QLabel@@QEAAXAEBVQPixmap@@@Z");
         s_pfn_fromUtf8_str = (pfn_fromUtf8_str)GetProcAddress(hCore, "?fromUtf8@QString@@SA?AV1@PEBD_J@Z");
         s_pfn_toUtf8 = (pfn_toUtf8)GetProcAddress(hCore, "?toUtf8@QString@@QEGBA?AVQByteArray@@XZ");
         if (!s_pfn_toUtf8) s_pfn_toUtf8 = (pfn_toUtf8)GetProcAddress(hCore, "?toUtf8@QString@@QEHAA?AVQByteArray@@XZ");
@@ -630,6 +674,103 @@ static void TriggerLiveQtWidgetTranslation(void) {
         for (int64_t i = 0; i < widget_list.size; i++) {
             void* w = widget_list.ptr[i];
             if (!w) continue;
+
+            // Check ObjectName
+            char obj_name_buf[128] = {0};
+            if (s_pfn_objectName) {
+                char qstr_n[32] = {0};
+                s_pfn_objectName(w, qstr_n);
+                char qba_n[32] = {0};
+                s_pfn_toUtf8(qstr_n, qba_n);
+                const char* oname = s_pfn_constData(qba_n);
+                if (oname) strncpy(obj_name_buf, oname, sizeof(obj_name_buf) - 1);
+                s_pfn_dtor(qba_n);
+                s_pfn_dtor(qstr_n);
+            }
+
+            // Modern Home List View on FritchiiTile
+            if (strcmp(obj_name_buf, "FritchiiTile") == 0) {
+                void* parent = s_pfn_parentWidget ? s_pfn_parentWidget(w) : NULL;
+                void* layout = (parent && s_pfn_layout) ? s_pfn_layout(parent) : NULL;
+                if (layout && s_pfn_setDirection) {
+                    s_pfn_setDirection(layout, s_modern_home_list ? 2 : 0);
+                }
+
+                if (s_modern_home_list) {
+                    if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 2);
+                    if (s_pfn_setIconSize) {
+                        struct { int w, h; } sz = {56, 56};
+                        s_pfn_setIconSize(w, &sz);
+                    }
+                    if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 64);
+                    if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 640);
+
+                    if (s_pfn_toolTip && s_pfn_btn_setText) {
+                        char q_tip[32] = {0};
+                        s_pfn_toolTip(w, q_tip);
+                        char q_ba[32] = {0};
+                        s_pfn_toUtf8(q_tip, q_ba);
+                        const char* full_title = s_pfn_constData(q_ba);
+                        if (full_title && full_title[0] != '\0') {
+                            char q_new[32] = {0};
+                            s_pfn_fromUtf8_str(q_new, full_title, -1);
+                            s_pfn_btn_setText(w, q_new);
+                            s_pfn_dtor(q_new);
+                        }
+                        s_pfn_dtor(q_ba);
+                        s_pfn_dtor(q_tip);
+                    }
+
+                    if (s_pfn_setStyleSheet) {
+                        const char* ss = "QToolButton#FritchiiTile { background: #18181b; border: 1px solid #27272a; border-radius: 8px; padding: 6px 14px; text-align: left; font-size: 13px; font-weight: 500; color: #f4f4f5; } QToolButton#FritchiiTile:hover { background: #222227; border-color: #a78bfa; color: #ffffff; }";
+                        char q_ss[32] = {0};
+                        s_pfn_fromUtf8_str(q_ss, ss, -1);
+                        s_pfn_setStyleSheet(w, q_ss);
+                        s_pfn_dtor(q_ss);
+                    }
+                } else {
+                    if (s_pfn_setToolButtonStyle) s_pfn_setToolButtonStyle(w, 3);
+                    if (s_pfn_setIconSize) {
+                        struct { int w, h; } sz = {72, 72};
+                        s_pfn_setIconSize(w, &sz);
+                    }
+                    if (s_pfn_setMinimumHeight) s_pfn_setMinimumHeight(w, 0);
+                    if (s_pfn_setMinimumWidth) s_pfn_setMinimumWidth(w, 0);
+                    if (s_pfn_setStyleSheet) {
+                        char q_ss[32] = {0};
+                        s_pfn_fromUtf8_str(q_ss, "", -1);
+                        s_pfn_setStyleSheet(w, q_ss);
+                        s_pfn_dtor(q_ss);
+                    }
+                }
+                continue;
+            }
+
+            // Pochita Dialog Logo Replacement
+            if (strcmp(obj_name_buf, "labelLogo") == 0) {
+                if (!g_hChainsaw) {
+                    HMODULE hExe = GetModuleHandleW(NULL);
+                    g_hChainsaw = (HICON)LoadImageW(hExe, L"IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+                    if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(568), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+                }
+                if (g_hChainsaw && s_pfn_pixmapFromWinHICON && s_pfn_setPixmap) {
+                    char qpix[64] = {0};
+                    s_pfn_pixmapFromWinHICON(qpix, g_hChainsaw);
+                    s_pfn_setPixmap(w, qpix);
+                    if (s_pfn_dtor_pixmap) s_pfn_dtor_pixmap(qpix);
+                }
+                continue;
+            }
+
+            if (strcmp(obj_name_buf, "labelYuzu") == 0) {
+                if (s_pfn_lbl_setText) {
+                    char q_yz[32] = {0};
+                    s_pfn_fromUtf8_str(q_yz, "Yngchii-X3D", -1);
+                    s_pfn_lbl_setText(w, q_yz);
+                    s_pfn_dtor(q_yz);
+                }
+                continue;
+            }
 
             // 1. Handle QTabBar tabs
             if (s_pfn_tab_count && s_pfn_tab_text && s_pfn_tab_setText && s_pfn_inherits(w, "QTabBar")) {
@@ -1065,6 +1206,11 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
     }
 
     if (uMsg == WM_KEYDOWN) {
+        if (wParam == VK_F8 || (wParam == 'G' && (GetKeyState(VK_CONTROL) & 0x8000))) {
+            s_modern_home_list = !s_modern_home_list;
+            TriggerLiveQtWidgetTranslation();
+            return 0;
+        }
         if (wParam == VK_F9 || (wParam == 'L' && (GetKeyState(VK_CONTROL) & 0x8000))) {
             if (s_hwndLangBtn && IsWindow(s_hwndLangBtn) && !s_is_in_game) {
                 ApplyLanguageState(s_hwndLangBtn, !g_lang_vn);
@@ -1401,7 +1547,12 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
         }
     }
 
-    HICON hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(568), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+    if (!g_hChainsaw) {
+        g_hChainsaw = (HICON)LoadImageW(hExe, L"IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+        if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(568), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+        if (!g_hChainsaw) g_hChainsaw = (HICON)LoadImageW(hExe, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+    }
+    HICON hChainsaw = g_hChainsaw;
 
     pfnSetThreadInformation pSetThreadInformation = (pfnSetThreadInformation)GetProcAddress(hK32, "SetThreadInformation");
     pfnGetThreadDescription pGetThreadDescription = (pfnGetThreadDescription)GetProcAddress(hK32, "GetThreadDescription");
@@ -1429,7 +1580,28 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                     }
 
                     // Dependencies window title
-                    if (wcsstr(title, L"Lichii Dependencies") != NULL) {
+                    if (wcsstr(title, L"Dependencies") != NULL) {
+                        SetWindowTextW(hwnd, L"Yngchii-X3D Dependencies");
+                        if (hChainsaw) {
+                            SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hChainsaw);
+                            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hChainsaw);
+                        }
+                    }
+                    if (wcsstr(title, L"About Fritchii") != NULL || wcsstr(title, L"About Eden") != NULL || wcsstr(title, L"About Lichii") != NULL) {
+                        SetWindowTextW(hwnd, L"About Yngchii-X3D");
+                        if (hChainsaw) {
+                            SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hChainsaw);
+                            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hChainsaw);
+                        }
+                    }
+                    if (wcscmp(title, L"Update") == 0) {
+                        SetWindowTextW(hwnd, L"Yngchii-X3D Update");
+                        if (hChainsaw) {
+                            SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hChainsaw);
+                            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hChainsaw);
+                        }
+                    }
+                    if (0 && wcsstr(title, L"Lichii Dependencies") != NULL) {
                         SetWindowTextW(hwnd, L"Yngchii-X3D Dependencies");
                         if (hChainsaw) {
                             SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hChainsaw);

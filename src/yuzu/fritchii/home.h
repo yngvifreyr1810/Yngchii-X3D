@@ -79,6 +79,7 @@ private:
     QTimer* refresh_timer = nullptr;
 
     bool list_mode = false;
+    bool modern_list_view = true;
     QString hero_path;
     u64 hero_id = 0;
 };

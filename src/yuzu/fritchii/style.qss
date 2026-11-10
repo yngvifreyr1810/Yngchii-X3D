@@ -206,11 +206,14 @@ QPushButton#FritchiiPlay {
 QPushButton#FritchiiPlay:hover { background: #b59dfb; }
 QPushButton#FritchiiPlay:pressed { background: #9a7cf5; }
 QToolButton#FritchiiTile {
-    background: transparent;
-    border: none;
-    border-radius: 12px;
-    padding: 8px;
-    color: #c9c9d3;
-    font-size: 13px;
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 10px;
+    padding: 8px 16px;
+    color: #ececf1;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+    margin-bottom: 4px;
 }
-QToolButton#FritchiiTile:hover { background: #1b1b1f; color: #ececf1; }
+QToolButton#FritchiiTile:hover { background: #27272a; border-color: #a78bfa; color: #ffffff; }

@@ -362,17 +362,31 @@ void Home::Refresh() {
         }
         delete item;
     }
-    const auto tile = [this](const QIcon& icon, const QString& text) {
+    row->setDirection(modern_list_view ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    const auto tile = [this](const QIcon& icon, const QString& text, const QString& subtitle = QString()) {
         auto* button = new QToolButton(row_box);
         button->setObjectName(QStringLiteral("FritchiiTile"));
-        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        button->setIcon(icon);
-        button->setIconSize(QSize(TileIcon, TileIcon));
-        button->setFixedWidth(TileIcon + 40);
+        if (modern_list_view) {
+            button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            button->setIcon(icon);
+            button->setIconSize(QSize(56, 56));
+            button->setMinimumHeight(64);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            if (!subtitle.isEmpty()) {
+                button->setText(QStringLiteral("%1\n%2").arg(text, subtitle));
+            } else {
+                button->setText(text);
+            }
+        } else {
+            button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            button->setIcon(icon);
+            button->setIconSize(QSize(TileIcon, TileIcon));
+            button->setFixedWidth(TileIcon + 40);
+            const QFontMetrics metrics(button->font());
+            button->setText(metrics.elidedText(text, Qt::ElideRight, TileIcon + 24));
+        }
         button->setCursor(Qt::PointingHandCursor);
         button->setFocusPolicy(Qt::NoFocus);
-        const QFontMetrics metrics(button->font());
-        button->setText(metrics.elidedText(text, Qt::ElideRight, TileIcon + 24));
         button->setToolTip(text);
         row->addWidget(button);
         return button;
@@ -383,7 +397,9 @@ void Home::Refresh() {
             continue;
         }
         ++shown;
-        QToolButton* button = tile(QIcon(Rounded(game.icon, TileIcon, 12)), game.title);
+        const QString sub = QStringLiteral("Title ID: 0x%1 • Ryzen X3D Active")
+                                .arg(QString::number(game.program_id, 16).toUpper());
+        QToolButton* button = tile(QIcon(Rounded(game.icon, modern_list_view ? 56 : TileIcon, 12)), game.title, sub);
         connect(button, &QToolButton::clicked, this,
                 [this, path = game.path, id = game.program_id] {
                     hero_path = path;
