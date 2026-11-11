@@ -5181,9 +5181,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeli
         info_ptrs, std::move(emit_stages), library_params);
     // As a translation's (the live environments answered the same questions): kept if evicted.
     VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
-    for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
-        if (graphics_key.unique_hashes[index] != 0) {
-            mapped_pointers[index] = environments.envs[index].MappedStoragePointerKeys();
+    for (size_t stage = 0; stage < Maxwell::MaxShaderProgram; ++stage) {
+        if (graphics_key.unique_hashes[stage] != 0) {
+            mapped_pointers[stage] = environments.envs[stage].MappedStoragePointerKeys();
         }
     }
     pipeline->SetMappedPointers(std::move(mapped_pointers));
