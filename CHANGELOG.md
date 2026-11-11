@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.8.4.0] - 2026-11-11
+
+### Upstream Fritchii v5.8.4 Synchronizations
+- 4f5c53149b Revert EXP47 (read-back lock bits) for v5.8.4
+- 58c5571e3c fritchii: Saves always backs up and says where, before and after
+- e96eea7e7d Fritchii v5.8.4: version and settings revision 12
+- f1cacebce2 fritchii: Saves copies into the target's real user profile, and fixes orphaned saves
+- 62bf633408 settings: say that Switch 2 games always use 12 GB when the memory layout is touched
+- 04c3d31d8a settings: the 12 GB layout reads "Switch 2", and doesn't count as an OoT override
+- f6ce2754c1 main_window: log the folder Open Save Data / Mod Data Location opens
+- da25dc32d6 settings: DLSS quality and preset per game too (v5.8.4)
+- e74510aa80 video_core: EXP47, answer guest reads of clean GPU-written pages without the cache locks
+- e2dad308a6 Fritchii v5.8.3: a Saves window to export, import and copy saves
+- 6649abc4f1 Fritchii v5.8.2: ask before copying old data, mods only when ticked
+- d042bdd731 Fritchii v5.8.1: copy from the Lichii 150+ folder too (newest saves win, Help > Copy Data)
+- 6e11fee517 Fritchii v5.8: settings revision 8
+- 08b95c876f Fritchii keeps its own data folder (%APPDATA%\fritchii), imported automatically (v5.8)
+- 909be315f9 fritchii: Discord and Donate buttons on the home page, with their names
+- 416bfed001 tests: the DLSS settings test checks our K default and preset enum
+- ef961c0cef video_core: DLSS quality modes, live apply and status display (port of zortos293/Lichii#1249)
+- 063dbb741f patch_manager: water ripples at any frame rate with Dark's Dynamic FPS too (built-in, v5.8)
+- 1c8474ee96 maxwell_3d: the back evaluates NVN's conditional render macro (port of Eglantine d3612f82b1 part 1, EXP53)
+- 289ffeb16b memory_manager: read EDEN_NX2_NO_TRANSLATION_CACHE once, not on every lookup
+- d20c32704c video_core: stop write-protecting guest pages the CPU rewrites every frame (port of Eglantine f27522bfb9, EXP48)
+- 85a33019b7 video_core: cache GPU page translations per thread (port of Eglantine b1e650849e, EXP63)
+- 3236102f61 core: do not wait for the time services when applying settings during loading (#1168)
+- 919d5b0d58 vulkan: keep NVIDIA DLSS on when Streamline warns that the VRAM budget is used up (#941)
+- 93423cd43b nx2: skip dynarmic's IR verification pass (EDEN_NX2_JIT_FAST_COMPILE)
+- db3fdb2927 textures: swizzle and unswizzle block linear in 16-byte units from a per-GOB offset table (#784)
+- d03cd4cd59 Preparing shaders: stamp it with a hash of the shader translator, not the release version
+- d9f6b81f81 Fritchii v5.8: version
+
+### Yngchii-X3D Optimizations Maintained
+- Dedicated AMD Ryzen 3D V-Cache thread core pinning (GPUFront Core 1, GPUBack Core 2).
+- Hardware-gated AVX-512 dirty page scan with clean AVX2 fallback.
+- In-place auto-updater targeting Yngchii-X3D releases with pre-release safety.
+- Selective NVIDIA Overlay & Game Filter bypass.
+
+---
+
+
 ## [5.7.0] - 2026-11-11
 
 ### Upstream Fritchii v5.7 Synchronizations
