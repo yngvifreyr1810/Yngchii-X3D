@@ -2264,12 +2264,12 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                             return dispatches.unbounded[static_cast<size_t>(reason)];
                         };
                         u64 dispatch_drains = 0;
-                        for (const u64 count : dispatch_checks) {
-                            dispatch_drains += count;
+                        for (const u64 entries : dispatch_checks) {
+                            dispatch_drains += entries;
                         }
                         u64 dispatches_unbounded = 0;
-                        for (const u64 count : dispatches.unbounded) {
-                            dispatches_unbounded += count;
+                        for (const u64 entries : dispatches.unbounded) {
+                            dispatches_unbounded += entries;
                         }
                         using Release = VideoCommon::GpuSplit::ReleaseNote;
                         const auto& releases = split.ReleaseNotes();
@@ -2712,22 +2712,22 @@ void Maxwell3D::RunDrawBatch(Core::System& system, const u64* writes, u32 count,
     if (repeats <= 1) {
         return;
     }
-    auto& state = draw_manager.draw_state;
+    auto& draw_state = draw_manager.draw_state;
     if ((VideoCore::Nx2Debug::Experiment(22) & 8) == 0) [[likely]] {
         // The repeats write what the registers and shadow RAM hold, raise flags that are raised,
         // set draw_indexed again and draw nothing (IsBatchMiddle): each counts an instance in
         // its draw.begin (DrawManager::DrawBegin, Subsequent).
-        state.instance_count += repeats - 1;
+        draw_state.instance_count += repeats - 1;
         return;
     }
     // EXP22 bit 8: the repeats as their single entries, against that.
     constexpr u32 MaxWrites = FrontState::MaxBatchWrites;
     const u32 checked = (std::min)(count, MaxWrites);
-    const u32 expected = state.instance_count + (repeats - 1);
+    const u32 expected = draw_state.instance_count + (repeats - 1);
     const DirtyState::Flags flags = dirty.flags;
-    const auto mode = state.draw_mode;
-    const bool indexed = state.draw_indexed;
-    const auto topology = state.topology;
+    const auto mode = draw_state.draw_mode;
+    const bool indexed = draw_state.draw_indexed;
+    const auto topology = draw_state.topology;
     std::array<u32, MaxWrites> group_regs{};
     std::array<u32, MaxWrites> group_shadow{};
     for (u32 i = 0; i < checked; ++i) {
@@ -2738,9 +2738,9 @@ void Maxwell3D::RunDrawBatch(Core::System& system, const u64* writes, u32 count,
     for (u32 repeat = 1; repeat < repeats; ++repeat) {
         run_group();
     }
-    bool differs = state.instance_count != expected || dirty.flags != flags ||
-                   state.draw_mode != mode || state.draw_indexed != indexed ||
-                   state.topology != topology;
+    bool differs = draw_state.instance_count != expected || dirty.flags != flags ||
+                   draw_state.draw_mode != mode || draw_state.draw_indexed != indexed ||
+                   draw_state.topology != topology;
     for (u32 i = 0; i < checked; ++i) {
         const u32 method = static_cast<u32>(writes[i]) & 0xffff;
         differs |= regs.reg_array[method] != group_regs[i] ||
@@ -2750,7 +2750,7 @@ void Maxwell3D::RunDrawBatch(Core::System& system, const u64* writes, u32 count,
     if (differs && g_exp22_checks.batch_differences++ < 32) {
         LOG_ERROR(HW_GPU,
                   "EXP22 check: draw batch of {} writes x {} differs: {} instances, expected {}",
-                  count, repeats, state.instance_count, expected);
+                  count, repeats, draw_state.instance_count, expected);
     }
     ReportExp22Checks();
 }
