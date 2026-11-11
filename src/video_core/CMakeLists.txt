@@ -524,7 +524,7 @@ endif()
 
 target_link_libraries(video_core PUBLIC common core)
 if(WIN32)
-    target_link_libraries(video_core PRIVATE advapi32 dwmapi)
+    target_link_libraries(video_core PRIVATE advapi32 dwmapi synchronization)
 endif()
 
 # Shader warm-up builder: game archives use zstd (also with dictionaries) and zlib.
