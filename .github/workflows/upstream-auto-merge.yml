@@ -1,9 +1,6 @@
 name: Upstream Auto-Merge & Sync
 
 on:
-  schedule:
-    # Run every 2 hours
-    - cron: '0 */2 * * *'
   workflow_dispatch:
     inputs:
       force_sync:
@@ -106,7 +103,7 @@ jobs:
             .github/assets .github/scripts/package_windows.py .github/scripts/patch_exe_icon_inplace.py \
             .github/scripts/sync_release.py .github/workflows dist/branding/yngchii_logo.png \
             dist/eden.ico dist/fritchii.ico dist/lichii.ico dist/yuzu.ico src/yuzu/fritchii/whats-new.md \
-            dist/frizti_version.txt
+            dist/frizti_version.txt README.md
 
           REVIEW_DIR="$RUNNER_TEMP/upstream-review"
           if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
@@ -119,7 +116,7 @@ jobs:
             git merge --abort
             echo "Review required. See the upstream-sync-review artifact for the commits and conflicting paths." >> "$GITHUB_STEP_SUMMARY"
             echo "review_artifact=true" >> "$GITHUB_OUTPUT"
-            echo "merge_status=review" >> "$GITHUB_OUTPUT"
+            echo "merge_status=conflict" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -186,6 +183,12 @@ jobs:
           name: upstream-sync-review
           path: ${{ runner.temp }}/upstream-review/
           if-no-files-found: error
+
+      - name: Report unresolved merge conflicts
+        if: steps.do_merge.outputs.merge_status == 'conflict'
+        run: |
+          echo "::error::Upstream merge has unresolved conflicts. See the upstream-sync-review artifact."
+          exit 1
 
   package-windows:
     name: Build Windows x64 candidate
