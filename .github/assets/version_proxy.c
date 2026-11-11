@@ -2818,18 +2818,20 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             }
 
             if (strcmp(obj_name_buf, "labelBuildInfo") == 0 && s_pfn_lbl_text && s_pfn_lbl_setText) {
-                const char upstream[] = "Fritchii | v5.6";
+                const char upstream[] = "Fritchii | v";
                 char q_text[32] = {0};
                 char q_bytes[32] = {0};
                 s_pfn_lbl_text(w, q_text);
                 s_pfn_toUtf8(q_text, q_bytes);
                 const char* text = s_pfn_constData(q_bytes);
                 const char* version = text ? strstr(text, upstream) : NULL;
-                if (version) {
+                const char* number = version ? version + sizeof(upstream) - 1 : NULL;
+                size_t number_len = number ? strspn(number, "0123456789.") : 0;
+                if (number_len > 0) {
                     char updated[512];
                     int len = snprintf(updated, sizeof(updated),
-                        "%.*sYngchii-X3D " YNGCHII_DISPLAY_VERSION " (Fritchii upstream V5.6)%s",
-                        (int)(version - text), text, version + sizeof(upstream) - 1);
+                        "%.*sYngchii-X3D " YNGCHII_DISPLAY_VERSION " (Fritchii upstream V%.*s)%s",
+                        (int)(version - text), text, (int)number_len, number, number + number_len);
                     if (len > 0 && len < (int)sizeof(updated)) {
                         char q_updated[32] = {0};
                         s_pfn_fromUtf8_str(q_updated, updated, len);
@@ -3718,9 +3720,21 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                         }
                     }
 
-                    // Main emulator window title
+                    // Source builds already use Yngchii branding but report the upstream version.
+                    const wchar_t native_prefix[] = L"Yngchii-X3D | v";
+                    const wchar_t native_build_name[] = L" | Fritchii";
+                    const bool native_title = wcsncmp(title, native_prefix, _countof(native_prefix) - 1) == 0;
                     wchar_t* p = wcsstr(title, L"Fritchii | v5.6");
-                    if (p != NULL) {
+                    if (native_title) {
+                        const wchar_t* number = title + _countof(native_prefix) - 1;
+                        const wchar_t* suffix = number + wcsspn(number, L"0123456789.");
+                        if (wcsncmp(suffix, native_build_name, _countof(native_build_name) - 1) == 0) {
+                            suffix += _countof(native_build_name) - 1;
+                        }
+                        wchar_t new_title[512] = {0};
+                        swprintf(new_title, _countof(new_title), L"%ls%ls", target_prefix, suffix);
+                        SetWindowTextW(hwnd, new_title);
+                    } else if (p != NULL) {
                         wchar_t new_title[512] = {0};
                         const wchar_t* suffix = p + wcslen(L"Fritchii | v5.6");
                         swprintf(new_title, 512, L"%ls%ls", target_prefix, suffix);
@@ -3769,7 +3783,7 @@ static DWORD WINAPI MonitorThread(LPVOID lpParam) {
                     }
 
                     // Startup dialogs can also have a Qt QWindowIcon class.
-                    bool main_title = wcsncmp(title, L"Fritchii | v5.", 14) == 0 ||
+                    bool main_title = native_title || wcsncmp(title, L"Fritchii | v5.", 14) == 0 ||
                                       wcsncmp(title, target_prefix, wcslen(target_prefix)) == 0;
                     if (!s_origMainWndProc && main_title && IsWindowVisible(hwnd) &&
                         !GetParent(hwnd) && wcsstr(cls, L"QWindow")) {
