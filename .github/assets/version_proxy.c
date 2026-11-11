@@ -14,7 +14,7 @@
 #include <shlwapi.h>
 
 #ifndef YNGCHII_VERSION
-#define YNGCHII_VERSION "5.6.1.1"
+#define YNGCHII_VERSION "5.8.4.1.1"
 #endif
 #define YNGCHII_DISPLAY_VERSION "V" YNGCHII_VERSION
 
@@ -1004,6 +1004,7 @@ typedef void (*pfn_qicon_dtor)(void* this_ptr);
 typedef void (*pfn_setIcon)(void* this_ptr, const void* qicon_ptr);
 
 // QLayout / QBoxLayout
+typedef int (*pfn_layout_indexOf)(const void* layout_ptr, const void* widget);
 typedef void (*pfn_removeWidget)(void* layout_ptr, void* widget);
 typedef void (*pfn_insertWidget)(void* layout_ptr, int index, void* widget, int stretch, int alignment);
 typedef void (*pfn_addWidget)(void* layout_ptr, void* widget, int stretch, int alignment);
@@ -1113,11 +1114,13 @@ static pfn_setIcon s_pfn_setIcon = NULL;
 static void* s_hero_backdrop = NULL;
 static char s_last_hero_title[256] = {0};
 static int s_last_backdrop_w = 0;
+static int s_last_backdrop_h = 0;
 static void (*s_pfn_label_pixmap)(const void*, void*) = NULL;
 static void (*s_pfn_label_clear)(void*) = NULL;
 static bool (*s_pfn_pixmap_save)(const void*, const void*, const char*, int) = NULL;
 static bool (*s_pfn_pixmap_isNull)(const void*) = NULL;
 
+static pfn_layout_indexOf s_pfn_layout_indexOf = NULL;
 static pfn_removeWidget s_pfn_removeWidget = NULL;
 static pfn_insertWidget s_pfn_insertWidget = NULL;
 static pfn_addWidget s_pfn_addWidget = NULL;
@@ -1787,6 +1790,7 @@ static void TriggerLiveQtWidgetTranslation(int force) {
         s_pfn_setHScrollBarPolicy = (pfn_setScrollBarPolicy)GetProcAddress(hWidgets, "?setHorizontalScrollBarPolicy@QAbstractScrollArea@@QEAAXW4ScrollBarPolicy@Qt@@@Z");
         s_pfn_setVScrollBarPolicy = (pfn_setScrollBarPolicy)GetProcAddress(hWidgets, "?setVerticalScrollBarPolicy@QAbstractScrollArea@@QEAAXW4ScrollBarPolicy@Qt@@@Z");
 
+        s_pfn_layout_indexOf = (pfn_layout_indexOf)GetProcAddress(hWidgets, "?indexOf@QLayout@@UEBAHPEBVQWidget@@@Z");
         s_pfn_removeWidget = (pfn_removeWidget)GetProcAddress(hWidgets, "?removeWidget@QLayout@@QEAAXPEAVQWidget@@@Z");
         s_pfn_insertWidget = (pfn_insertWidget)GetProcAddress(hWidgets, "?insertWidget@QBoxLayout@@QEAAXHPEAVQWidget@@HV?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
         s_pfn_addWidget = (pfn_addWidget)GetProcAddress(hWidgets, "?addWidget@QBoxLayout@@QEAAXPEAVQWidget@@HV?$QFlags@W4AlignmentFlag@Qt@@@@@Z");
@@ -1905,7 +1909,6 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             void* page_layout = s_pfn_layout ? s_pfn_layout(page) : NULL;
             if (page_layout) {
                 if (s_pfn_setContentsMargins) s_pfn_setContentsMargins(page_layout, 56, 36, 56, 20);
-                if (s_pfn_setSpacing) s_pfn_setSpacing(page_layout, 72);
             }
 
             int page_w = 1280;
@@ -1921,6 +1924,12 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             int backdrop_y = 14;
             int backdrop_w = page_w - 64;
             int backdrop_h = 330;
+            if (s_game_scroll_area && s_pfn_geometry) {
+                const int* list_rect = (const int*)s_pfn_geometry(s_game_scroll_area);
+                if (list_rect && list_rect[1] > backdrop_y + 16) {
+                    backdrop_h = list_rect[1] - backdrop_y - 16;
+                }
+            }
 
             if (!s_hero_backdrop && s_pfn_lbl_ctor) {
                 s_hero_backdrop = malloc(512);
@@ -2019,10 +2028,12 @@ static void TriggerLiveQtWidgetTranslation(int force) {
             }
 
             if (s_hero_backdrop && (force || lang_changed || mode_changed ||
-                strcmp(s_last_hero_title, cur_hero_title) != 0 || abs(s_last_backdrop_w - backdrop_w) > 4)) {
+                strcmp(s_last_hero_title, cur_hero_title) != 0 ||
+                abs(s_last_backdrop_w - backdrop_w) > 4 || abs(s_last_backdrop_h - backdrop_h) > 4)) {
                 RefreshHeroBackdrop(hero_cover, hero_pid, backdrop_w, backdrop_h);
                 strncpy(s_last_hero_title, cur_hero_title, sizeof(s_last_hero_title) - 1);
                 s_last_backdrop_w = backdrop_w;
+                s_last_backdrop_h = backdrop_h;
             }
         }
         for (int64_t i = 0; i < widget_list.size; i++) {
@@ -2339,13 +2350,15 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                 if (!s_game_scroll_area && parent && s_pfn_scroll_ctor && s_pfn_setWidget) {
                     void* page = s_pfn_parentWidget ? s_pfn_parentWidget(parent) : NULL;
                     void* page_layout = (page && s_pfn_layout) ? s_pfn_layout(page) : NULL;
-                    if (page_layout && s_pfn_removeWidget) {
-                        s_pfn_removeWidget(page_layout, parent);
-
+                    const int row_index = (page_layout && s_pfn_layout_indexOf)
+                                              ? s_pfn_layout_indexOf(page_layout, parent)
+                                              : -1;
+                    if (row_index >= 0 && s_pfn_removeWidget && s_pfn_insertWidget) {
                         void* scroll = malloc(1024);
                         if (scroll) {
                             memset(scroll, 0, 1024);
                             s_pfn_scroll_ctor(scroll, page);
+                            s_pfn_removeWidget(page_layout, parent);
                             s_pfn_setWidget(scroll, parent);
                             if (s_pfn_setWidgetResizable) s_pfn_setWidgetResizable(scroll, 1);
                             if (s_pfn_setSizePolicy) s_pfn_setSizePolicy(scroll, 7, 7); // Expanding, Expanding
@@ -2375,30 +2388,13 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                                 s_pfn_dtor(q_sss);
                             }
 
-                            if (s_pfn_insertWidget) {
-                                s_pfn_insertWidget(page_layout, 2, scroll, 100, 0); // stretch = 100 to fill vertical space!
-                            } else if (s_pfn_addWidget) {
-                                s_pfn_addWidget(page_layout, scroll, 100, 0);
-                            }
-// Margins managed by Pass 2
+                            s_pfn_insertWidget(page_layout, row_index, scroll, 100, 0);
 
                             if (s_pfn_show) {
                                 s_pfn_show(parent);
                                 s_pfn_show(scroll);
                             }
                             s_game_scroll_area = scroll;
-                            if (s_hwndMain && IsWindow(s_hwndMain)) {
-                                RECT wr;
-                                if (GetWindowRect(s_hwndMain, &wr) && (wr.right - wr.left > 1280 || wr.bottom - wr.top > 820)) {
-                                    int screen_w = GetSystemMetrics(SM_CXSCREEN);
-                                    int screen_h = GetSystemMetrics(SM_CYSCREEN);
-                                    int win_w = 1280;
-                                    int win_h = (screen_h >= 960) ? 920 : 850;
-                                    int win_x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
-                                    int win_y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
-                                    SetWindowPos(s_hwndMain, NULL, win_x, win_y, win_w, win_h, SWP_NOZORDER | SWP_NOACTIVATE);
-                                }
-                            }
                         }
                     }
                 }
@@ -2698,25 +2694,13 @@ static void TriggerLiveQtWidgetTranslation(int force) {
                         if (lbl_stats) s_pfn_show(lbl_stats);
                     }
 
-                    int is_hero_card = (cur_hero_title[0] != '\0' &&
-                        (strcmp(full_title_buf, cur_hero_title) == 0 ||
-                         strstr(full_title_buf, cur_hero_title) != NULL ||
-                         strstr(cur_hero_title, full_title_buf) != NULL));
-
                     if (s_pfn_setStyleSheet) {
-                        char card_css[512];
-                        if (is_hero_card) {
-                            snprintf(card_css, sizeof(card_css),
-                                "QToolButton#FritchiiTile { background: #22222b; border: 1.5px solid %s; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
-                                "QToolButton#FritchiiTile:hover { background: #282833; border-color: %s; }",
-                                g_palettes[g_theme_idx].accent,
-                                g_palettes[g_theme_idx].accent_light);
-                        } else {
-                            snprintf(card_css, sizeof(card_css),
-                                "QToolButton#FritchiiTile { background: #1e1e24; border: 1px solid #2e2e38; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
-                                "QToolButton#FritchiiTile:hover { background: #262630; border-color: %s; }",
-                                g_palettes[g_theme_idx].accent);
-                        }
+                        char card_css[768];
+                        snprintf(card_css, sizeof(card_css),
+                            "QToolButton#FritchiiTile { background: #1e1e24; border: 1px solid #2e2e38; border-radius: 8px; margin-bottom: 6px; padding: 0px; text-align: left; } "
+                            "QToolButton#FritchiiTile:hover, QToolButton#FritchiiTile:focus { background: #262630; border-color: %s; } "
+                            "QToolButton#FritchiiTile:checked { background: #30303a; border-color: %s; }",
+                            g_palettes[g_theme_idx].accent_light, g_palettes[g_theme_idx].accent);
                         char q_css[32] = {0};
                         s_pfn_fromUtf8_str(q_css, card_css, -1);
                         s_pfn_setStyleSheet(w, q_css);
@@ -3238,17 +3222,6 @@ static LRESULT CALLBACK MainWndProcHook(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
         LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
         if (!(style & WS_CLIPCHILDREN)) {
             SetWindowLongPtrW(hWnd, GWL_STYLE, style | WS_CLIPCHILDREN);
-        }
-
-        RECT wr_init;
-        if (GetWindowRect(hWnd, &wr_init) && (wr_init.right - wr_init.left > 1280 || wr_init.bottom - wr_init.top > 820)) {
-            int screen_w = GetSystemMetrics(SM_CXSCREEN);
-            int screen_h = GetSystemMetrics(SM_CYSCREEN);
-            int win_w = 1280;
-            int win_h = (screen_h >= 960) ? 920 : 850;
-            int win_x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
-            int win_y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
-            SetWindowPos(hWnd, NULL, win_x, win_y, win_w, win_h, SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         WNDCLASSEXW wc;

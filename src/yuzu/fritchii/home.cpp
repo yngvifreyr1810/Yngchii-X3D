@@ -370,6 +370,16 @@ QWidget* Home::MakePage() {
     return page;
 }
 
+void Home::SetHero(const QString& path, u64 id, const QString& name, const QPixmap& icon) {
+    hero_path = path;
+    hero_id = id;
+    cover->setPixmap(Rounded(icon, CoverSize, 18));
+    cover->show();
+    title->setText(name);
+    play->setText(tr("Play"));
+    play->setIcon(Glyph(QStringLiteral("play"), 0x1c1433, 18));
+}
+
 void Home::Refresh() {
     const std::vector<Game> games = CollectGames(hooks.model, window->windowIcon().pixmap(256));
 
@@ -394,13 +404,7 @@ void Home::Refresh() {
     }
 
     if (hero) {
-        hero_path = hero->path;
-        hero_id = hero->program_id;
-        cover->setPixmap(Rounded(hero->icon, CoverSize, 18));
-        cover->show();
-        title->setText(hero->title);
-        play->setText(tr("Play"));
-        play->setIcon(Glyph(QStringLiteral("play"), 0x1c1433, 18));
+        SetHero(hero->path, hero->program_id, hero->title, hero->icon);
     } else {
         hero_path.clear();
         hero_id = 0;
@@ -410,8 +414,11 @@ void Home::Refresh() {
         play->setIcon(Glyph(QStringLiteral("plus"), 0x1c1433, 18));
     }
 
-    // The small row: the other games, then "All games" and "Add folder".
-    // deleteLater: a tile's own click can land here.
+    if (selected_game_path != hero_path) {
+        selected_game_path.clear();
+    }
+
+    // deleteLater: a tile's own click can land here in the compact view.
     while (QLayoutItem* item = row->takeAt(0)) {
         if (QWidget* widget = item->widget()) {
             widget->hide();
@@ -456,15 +463,25 @@ void Home::Refresh() {
         ++shown;
         const QString sub = game.details;
         QToolButton* button = tile(QIcon(Rounded(game.icon, modern_list_view ? 56 : TileIcon, 12)), game.title, sub);
-        if (modern_list_view && game.path == hero_path) {
-            button->setStyleSheet(QStringLiteral("QToolButton#FritchiiTile { background: #222227; border: 1px solid #a78bfa; border-radius: 10px; padding: 8px 16px; color: #ffffff; font-size: 14px; font-weight: 600; text-align: left; margin-bottom: 4px; }"));
+        if (modern_list_view) {
+            button->setFocusPolicy(Qt::StrongFocus);
+            button->setCheckable(true);
+            button->setAutoExclusive(true);
+            button->setChecked(game.path == selected_game_path);
+            connect(button, &QToolButton::clicked, this, [this, game] {
+                if (selected_game_path == game.path) {
+                    hooks.play(game.path, game.program_id);
+                    return;
+                }
+                selected_game_path = game.path;
+                SetHero(game.path, game.program_id, game.title, game.icon);
+            });
+        } else {
+            connect(button, &QToolButton::clicked, this, [this, path = game.path] {
+                hero_path = path;
+                Refresh();
+            });
         }
-        connect(button, &QToolButton::clicked, this,
-                [this, path = game.path, id = game.program_id] {
-                    hero_path = path;
-                    hero_id = id;
-                    Refresh();
-                });
     }
     if (!games.empty()) {
         QToolButton* all = tile(Icon(QStringLiteral("list"), 40), tr("All games"));

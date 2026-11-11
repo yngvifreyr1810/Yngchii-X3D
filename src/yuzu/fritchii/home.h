@@ -12,6 +12,7 @@ class QHBoxLayout;
 class QLabel;
 class QMainWindow;
 class QMenu;
+class QPixmap;
 class QPushButton;
 class QStandardItemModel;
 class QTimer;
@@ -58,6 +59,7 @@ private:
     void ShowList();
     void Restore();
     void Refresh();
+    void SetHero(const QString& path, u64 id, const QString& name, const QPixmap& icon);
 
     QWidget* MakeRail();
     QWidget* MakePage();
@@ -80,6 +82,7 @@ private:
 
     bool list_mode = false;
     bool modern_list_view = true;
+    QString selected_game_path;
     QString hero_path;
     u64 hero_id = 0;
 };

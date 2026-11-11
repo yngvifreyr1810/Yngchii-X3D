@@ -229,4 +229,9 @@ QToolButton#FritchiiTile {
     text-align: left;
     margin-bottom: 4px;
 }
-QToolButton#FritchiiTile:hover { background: #27272a; border-color: #a78bfa; color: #ffffff; }
+QToolButton#FritchiiTile:hover, QToolButton#FritchiiTile:focus {
+    background: #27272a; border-color: #a78bfa; color: #ffffff;
+}
+QToolButton#FritchiiTile:checked {
+    background: #303038; border-color: #a78bfa; color: #ffffff;
+}

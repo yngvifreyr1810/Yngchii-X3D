@@ -1537,15 +1537,11 @@ void MainWindow::InitializeHotkeys() {
 }
 
 void MainWindow::SetDefaultUIGeometry() {
-    // geometry: 53% of the window contents are in the upper screen half, 47% in the lower half
-    const QRect screenRect = QGuiApplication::primaryScreen()->geometry();
-
-    const int w = screenRect.width() * 2 / 3;
-    const int h = screenRect.height() * 2 / 3;
-    const int x = (screenRect.x() + screenRect.width()) / 2 - w / 2;
-    const int y = (screenRect.y() + screenRect.height()) / 2 - h * 53 / 100;
-
-    setGeometry(x, y, w, h);
+    const QRect available = screen()->availableGeometry();
+    const QSize size(available.width() * 86 / 100, available.height() * 86 / 100);
+    QRect geometry(QPoint{}, size);
+    geometry.moveCenter(available.center());
+    setGeometry(geometry);
 }
 
 void MainWindow::RestoreUIState() {
