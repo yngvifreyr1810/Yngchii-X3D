@@ -4,7 +4,6 @@
 #include "discord_impl.h"
 #include "common/logging.h"
 #include "common/settings.h"
-#include "common/x3d_detect.h"
 #include "core/core.h"
 #include "core/loader/loader.h"
 
@@ -24,7 +23,6 @@
 namespace DiscordRPC {
 
 static constexpr char DISCORD_CLIENT_ID[] = "1569019855057715350";
-static constexpr char DEFAULT_LOGO_URL[] = "https://files.catbox.moe/aacnh6.png";
 
 DiscordImpl::DiscordImpl(Core::System& system_) : system{system_} {
     start_time = std::chrono::duration_cast<std::chrono::seconds>(
@@ -115,33 +113,18 @@ void DiscordImpl::Update() {
     }
 
     std::string details;
-    std::string state;
-    std::string large_text;
-
-    const bool x3d_active = Common::DetectRyzenX3DCpu().is_supported_x3d;
 
     if (system.IsPoweredOn()) {
         system.GetAppLoader().ReadTitle(game_title);
         details = fmt::format("Playing {}", game_title.empty() ? "Nintendo Switch" : game_title);
-        state = x3d_active ? "⚡ Yngvi's X3D Optimize: ON | Vulkan" : "Stock Profile | Vulkan";
-        large_text = fmt::format("{} - Yngchii-X3D v5", game_title.empty() ? "Switch" : game_title);
     } else {
         details = "Idle in Main Menu";
-        state = x3d_active ? "⚡ Yngvi's X3D Optimize: Ready" : "Stock Profile | Ready";
-        large_text = "Yngchii-X3D v5 (AMD Ryzen X3D & Auto-VRAM Edition)";
     }
 
     nlohmann::json act = {
         {"details", details},
-        {"state", state},
         {"timestamps", {
             {"start", start_time}
-        }},
-        {"assets", {
-            {"large_image", DEFAULT_LOGO_URL},
-            {"large_text", large_text},
-            {"small_image", DEFAULT_LOGO_URL},
-            {"small_text", "Yngchii-X3D v5"}
         }}
     };
 
