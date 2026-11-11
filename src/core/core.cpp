@@ -250,13 +250,13 @@ struct System::Impl {
         // thread for the whole loading screen when settings were applied during it. If they
         // are not up yet there is nothing to refresh: they read the current settings when
         // they start.
-        auto& services = system.ServiceManager();
+        auto& time_service_registry = system.ServiceManager();
         auto settings_service =
-            services.GetService<Service::Set::ISystemSettingsServer>("set:sys");
+            time_service_registry.GetService<Service::Set::ISystemSettingsServer>("set:sys");
         auto static_service_a =
-            services.GetService<Service::Glue::Time::StaticService>("time:a");
+            time_service_registry.GetService<Service::Glue::Time::StaticService>("time:a");
         auto static_service_s =
-            services.GetService<Service::PSC::Time::StaticService>("time:s");
+            time_service_registry.GetService<Service::PSC::Time::StaticService>("time:s");
         if (!settings_service || !static_service_a || !static_service_s) {
             LOG_INFO(Core, "Time services not started yet, they will use the current settings");
             return;
