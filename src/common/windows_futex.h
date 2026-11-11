@@ -7,11 +7,16 @@
 #include <cstddef>
 #include <atomic>
 
+#ifdef _MSC_VER
+#include <windows.h>
+#include <synchapi.h>
+#else
 extern "C" {
 __declspec(dllimport) void __stdcall WakeByAddressSingle(void* Address);
 __declspec(dllimport) void __stdcall WakeByAddressAll(void* Address);
 __declspec(dllimport) int __stdcall WaitOnAddress(volatile void* Address, void* CompareAddress, size_t AddressSize, unsigned long dwMilliseconds);
 }
+#endif
 
 namespace Common {
 

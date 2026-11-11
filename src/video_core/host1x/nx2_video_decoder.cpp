@@ -233,12 +233,12 @@ struct Nx2VideoDecoder::Impl {
 
     /// Sends one packet and collects the pictures it completes. False when the decoder was
     /// replaced (a fault, or a failing GPU decoder): the packet should go to the new one.
-    bool SendReceive(const FFmpeg::Packet& packet, std::vector<Nx2Picture>& pictures) {
+    bool SendReceive(const FFmpeg::Packet& input_packet, std::vector<Nx2Picture>& pictures) {
         const size_t first = pictures.size();
         unsigned long code = 0;
         if (!Guarded(
                 [&] {
-                    context->SendPacket(packet);
+                    context->SendPacket(input_packet);
                     Receive(pictures);
                 },
                 code)) {
